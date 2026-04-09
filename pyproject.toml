@@ -1,0 +1,24 @@
+[project]
+name = "hermes-pmxt"
+version = "0.1.0"
+description = "Prediction market integration for Hermes Agent — search, quote, trade across Polymarket, Kalshi, Limitless via pmxt"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "pmxt>=2.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
