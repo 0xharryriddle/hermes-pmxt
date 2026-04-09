@@ -10,7 +10,6 @@ These are designed to be called from:
   3. CLI scripts
 """
 
-import re
 import time
 from datetime import datetime
 from typing import Optional
@@ -117,16 +116,16 @@ def _get_cached_market(exchange_name: str, market_id: str):
     return _market_cache.get((exchange_name, market_id))
 
 
-def _looks_like_outcome_id(value: str) -> bool:
-    """Outcome IDs are long numeric strings on pmxt-backed exchanges."""
-    return bool(re.fullmatch(r"\d{20,}", value.strip()))
+def _is_alias_outcome(value: str) -> bool:
+    """Return True for friendly aliases that still need market-based resolution."""
+    return value.strip().lower() in {"yes", "no"}
 
 
 def _resolve_outcome_id(market, outcome: str) -> Optional[str]:
     """Resolve a user-friendly outcome reference into an exchange outcome ID."""
     normalized = outcome.strip().lower()
 
-    if _looks_like_outcome_id(outcome):
+    if not _is_alias_outcome(outcome):
         return outcome.strip()
 
     if normalized == "yes" and getattr(market, "yes", None):
@@ -514,7 +513,7 @@ def pmxt_order(
 
     Args:
         market_id: Market ID
-        outcome: "yes" or "no" (outcome label)
+        outcome: "yes" / "no", an exact outcome label, or an exact outcome_id
         amount: Number of shares
         side: "buy" or "sell"
         exchange: Exchange name
@@ -536,7 +535,7 @@ def pmxt_order(
         outcome_id = None
         if cached_market is not None:
             outcome_id = _resolve_outcome_id(cached_market, outcome)
-        elif _looks_like_outcome_id(outcome):
+        elif not _is_alias_outcome(outcome):
             outcome_id = outcome.strip()
 
         if outcome_id is None:

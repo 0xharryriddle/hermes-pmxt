@@ -226,6 +226,44 @@ class TestOrder:
         assert result["success"]
         assert fake_exchange.calls[0]["outcome_id"] == "12345678901234567890"
 
+    def test_order_accepts_alphanumeric_outcome_id_without_cached_market(self, monkeypatch):
+        class Order:
+            id = "o3"
+            market_id = "m3"
+            outcome_id = "KXUKPARTY-29-C"
+            side = "buy"
+            type = "market"
+            amount = 1
+            price = None
+            status = "open"
+            filled = 0
+            remaining = 1
+            timestamp = 1234567892
+
+        class FakeExchange:
+            def __init__(self):
+                self.calls = []
+
+            def create_order(self, **kwargs):
+                self.calls.append(kwargs)
+                return Order()
+
+        fake_exchange = FakeExchange()
+
+        monkeypatch.setattr("hermes_pmxt.tools._ensure", lambda: None)
+        monkeypatch.setattr("hermes_pmxt.tools.get_exchange", lambda exchange: (fake_exchange, None))
+
+        result = pmxt_order(
+            "m3",
+            "KXUKPARTY-29-C",
+            1,
+            "buy",
+            "kalshi",
+        )
+
+        assert result["success"]
+        assert fake_exchange.calls[0]["outcome_id"] == "KXUKPARTY-29-C"
+
     def test_order_returns_clear_error_when_outcome_cannot_be_resolved(self, monkeypatch):
         class FakeExchange:
             def create_order(self, **kwargs):
