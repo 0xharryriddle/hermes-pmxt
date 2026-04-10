@@ -27,7 +27,12 @@ arbitrage detection, and order execution.
 ## Setup
 
 ```bash
+# pip
 pip install pmxt
+
+# uv
+uv pip install pmxt
+
 npm install -g pmxtjs  # Sidecar (auto-managed by SDK)
 ```
 

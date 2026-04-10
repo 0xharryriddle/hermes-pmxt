@@ -21,13 +21,28 @@ Agent: "The market implies a 1.9% chance (No: 98.1%). Polymarket is pricing this
 # Clone
 git clone https://github.com/0xharryriddle/hermes-pmxt.git
 cd hermes-pmxt
+```
 
+### Option A: pip
+
+```bash
 # Create venv + install
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+```
 
-# Install pmxt sidecar (required)
+### Option B: uv
+
+```bash
+# Create venv + install
+uv venv
+source .venv/bin/activate
+uv pip install -e .
+```
+
+```bash
+# Install pmxt sidecar (required for both flows)
 npm install -g pmxtjs
 ```
 
@@ -109,7 +124,14 @@ hermes-pmxt/
 ## Testing
 
 ```bash
+# pip / existing venv
 source .venv/bin/activate
+pytest -q
+
+# uv
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 pytest -q
 ```
 
