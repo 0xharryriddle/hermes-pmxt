@@ -33,7 +33,11 @@ pip install pmxt
 # uv
 uv pip install pmxt
 
-npm install -g pmxtjs  # Sidecar (auto-managed by SDK)
+# Sidecar (auto-managed by SDK), pick one package manager
+npm install -g pmxtjs
+pnpm add -g pmxtjs
+yarn global add pmxtjs
+bun add -g pmxtjs
 ```
 
 No API keys needed for **read-only** operations (search, quote, order book, OHLCV).

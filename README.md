@@ -42,8 +42,11 @@ uv pip install -e .
 ```
 
 ```bash
-# Install pmxt sidecar (required for both flows)
+# Install pmxt sidecar, pick one package manager
 npm install -g pmxtjs
+pnpm add -g pmxtjs
+yarn global add pmxtjs
+bun add -g pmxtjs
 ```
 
 ## Quick Start
