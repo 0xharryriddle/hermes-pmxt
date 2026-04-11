@@ -6,6 +6,9 @@ Run: source .venv/bin/activate && python -m pytest tests/ -v
 
 import pytest
 from hermes_pmxt import (
+    pmxt_compare_market,
+    pmxt_execution_price,
+    pmxt_portfolio,
     pmxt_search,
     pmxt_quote,
     pmxt_order_book,
@@ -15,6 +18,7 @@ from hermes_pmxt import (
     pmxt_arbitrage_scan,
     pmxt_server_health,
     pmxt_server_start,
+    pmxt_server_status,
 )
 from hermes_pmxt.tools import _remember_market, pmxt_order
 
@@ -22,6 +26,11 @@ from hermes_pmxt.tools import _remember_market, pmxt_order
 class TestServer:
     def test_server_health(self):
         result = pmxt_server_health()
+        assert result["success"]
+        assert "running" in result["data"]
+
+    def test_server_status(self):
+        result = pmxt_server_status()
         assert result["success"]
         assert "running" in result["data"]
 
@@ -57,6 +66,67 @@ class TestSearch:
         result = pmxt_search("test", exchange="nonexistent")
         # Should fail gracefully
         assert not result["success"] or result["count"] == 0
+
+    def test_search_forwards_optional_filters(self, monkeypatch):
+        class Outcome:
+            outcome_id = "yes-1"
+            label = "Yes"
+            price = 0.6
+            price_change_24h = None
+
+        class Market:
+            market_id = "m1"
+            title = "Will BTC hit 200k?"
+            description = ""
+            outcomes = [Outcome()]
+            volume_24h = 10
+            liquidity = 20
+            url = ""
+            status = "active"
+            slug = "btc-200k"
+            category = "crypto"
+            yes = Outcome()
+            no = None
+
+        class FakeExchange:
+            def __init__(self):
+                self.kwargs = None
+
+            def fetch_markets(self, query, limit, sort=None, searchIn=None, slug=None):
+                self.kwargs = {
+                    "query": query,
+                    "limit": limit,
+                    "sort": sort,
+                    "searchIn": searchIn,
+                    "slug": slug,
+                }
+                return [Market()]
+
+        fake_exchange = FakeExchange()
+
+        monkeypatch.setattr("hermes_pmxt.tools._ensure", lambda: None)
+        monkeypatch.setattr(
+            "hermes_pmxt.tools.get_exchange",
+            lambda exchange: (fake_exchange, None),
+        )
+
+        result = pmxt_search(
+            "bitcoin",
+            exchange="polymarket",
+            limit=5,
+            sort="volume",
+            search_in="both",
+            slug="btc-200k",
+        )
+
+        assert result["success"]
+        assert fake_exchange.kwargs == {
+            "query": "bitcoin",
+            "limit": 5,
+            "sort": "volume",
+            "searchIn": "both",
+            "slug": "btc-200k",
+        }
 
 
 class TestQuote:
@@ -139,6 +209,108 @@ class TestArbitrage:
         assert result["success"]
         assert "count" in result
         # May or may not find opportunities, but shouldn't error
+
+
+class TestExecutionAndPortfolio:
+    def test_execution_price_manual_fallback(self, monkeypatch):
+        class Level:
+            def __init__(self, price, size):
+                self.price = price
+                self.size = size
+
+        class Book:
+            asks = [Level(0.52, 5), Level(0.54, 10)]
+            bids = [Level(0.48, 5), Level(0.46, 10)]
+
+        class FakeExchange:
+            def fetch_order_book(self, outcome_id):
+                return Book()
+
+        monkeypatch.setattr("hermes_pmxt.tools._ensure", lambda: None)
+        monkeypatch.setattr(
+            "hermes_pmxt.tools.get_exchange",
+            lambda exchange: (FakeExchange(), None),
+        )
+
+        result = pmxt_execution_price("outcome-1", "polymarket", "buy", 10)
+
+        assert result["success"]
+        assert result["data"]["best_price"] == 0.52
+        assert result["data"]["estimated_price"] == pytest.approx(0.53)
+        assert result["data"]["slippage"] == pytest.approx(0.01)
+
+    def test_portfolio_aggregates_positions(self, monkeypatch):
+        def fake_balance(exchange):
+            return {
+                "success": True,
+                "data": [{"currency": "USD", "available": 100, "total": 100, "locked": 0}],
+            }
+
+        def fake_positions(exchange):
+            if exchange == "kalshi":
+                return {"success": False, "error": "missing creds"}
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "market_id": "m1",
+                        "size": 4,
+                        "current_price": 0.6,
+                        "unrealized_pnl": 1.2,
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("hermes_pmxt.tools.pmxt_balance", fake_balance)
+        monkeypatch.setattr("hermes_pmxt.tools.pmxt_positions", fake_positions)
+
+        result = pmxt_portfolio(["polymarket", "kalshi"])
+
+        assert result["success"]
+        assert result["data"]["summary"]["total_positions"] == 1
+        assert result["data"]["summary"]["total_notional"] == pytest.approx(2.4)
+        assert result["partial_errors"] == ["missing creds"]
+
+    def test_compare_market_groups_similar_titles(self, monkeypatch):
+        def fake_search(query, exchange=None, limit=5, **kwargs):
+            data = {
+                "polymarket": [{
+                    "exchange": "polymarket",
+                    "market_id": "p1",
+                    "title": "Will Bitcoin hit $200k in 2026?",
+                    "slug": "btc-200k",
+                    "outcomes": [
+                        {"label": "Yes", "price": 0.31},
+                        {"label": "No", "price": 0.69},
+                    ],
+                    "volume_24h": 100,
+                    "liquidity": 200,
+                    "url": "",
+                }],
+                "kalshi": [{
+                    "exchange": "kalshi",
+                    "market_id": "k1",
+                    "title": "Will Bitcoin hit $200k in 2026",
+                    "slug": "BTC200K",
+                    "outcomes": [
+                        {"label": "Yes", "price": 0.37},
+                        {"label": "No", "price": 0.63},
+                    ],
+                    "volume_24h": 50,
+                    "liquidity": 150,
+                    "url": "",
+                }],
+            }
+            return {"success": True, "data": data.get(exchange, [])}
+
+        monkeypatch.setattr("hermes_pmxt.tools.pmxt_search", fake_search)
+
+        result = pmxt_compare_market("bitcoin 200k", ["polymarket", "kalshi"])
+
+        assert result["success"]
+        assert result["count"] == 1
+        assert result["data"][0]["exchange_count"] == 2
+        assert result["data"][0]["yes_spread"] == pytest.approx(0.06)
 
 
 class TestOrder:

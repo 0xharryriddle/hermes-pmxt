@@ -1,7 +1,7 @@
 [project]
 name = "hermes-pmxt"
-version = "0.1.0"
-description = "Prediction market integration for Hermes Agent — search, quote, trade across Polymarket, Kalshi, Limitless via pmxt"
+version = "0.2.0"
+description = "Prediction market integration for Hermes Agent — search, compare, and trade across prediction market exchanges via pmxt"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
