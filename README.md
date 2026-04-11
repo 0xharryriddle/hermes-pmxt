@@ -1,8 +1,8 @@
 # hermes-pmxt
 
 Prediction market integration for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
-Search markets, check probabilities, detect arbitrage, and trade across Polymarket, Kalshi,
-and Limitless — powered by [pmxt](https://github.com/pmxt-dev/pmxt).
+Search markets, compare prices, detect arbitrage, and trade across prediction market
+exchanges via [pmxt](https://github.com/pmxt-dev/pmxt).
 
 ## What This Is
 
@@ -21,14 +21,33 @@ Agent: "The market implies a 1.9% chance (No: 98.1%). Polymarket is pricing this
 # Clone
 git clone https://github.com/0xharryriddle/hermes-pmxt.git
 cd hermes-pmxt
+```
 
+### Option A: pip
+
+```bash
 # Create venv + install
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+```
 
-# Install pmxt sidecar (required)
+### Option B: uv
+
+```bash
+# Create venv + install
+uv venv
+source .venv/bin/activate
+uv pip install -e .
+```
+
+```bash
+# Depending on your pmxt version, sidecar management may be automatic.
+# If your environment still needs the Node sidecar, install one of:
 npm install -g pmxtjs
+pnpm add -g pmxtjs
+yarn global add pmxtjs
+bun add -g pmxtjs
 ```
 
 ## Quick Start
@@ -50,16 +69,35 @@ print(f"YES: {quote['data']['yes_pct']}  NO: {quote['data']['no_pct']}")
 
 | Function | Auth? | Description |
 |----------|-------|-------------|
-| `pmxt_search(query, exchange?, limit?)` | No | Search markets by keyword |
+| `pmxt_search(query, exchange?, limit?, sort?, search_in?, slug?)` | No | Search markets by keyword or slug |
 | `pmxt_quote(identifier, exchange)` | No | Get YES/NO probabilities from a keyword or title phrase |
-| `pmxt_order_book(outcome_id, exchange)` | No | Get order book depth |
+| `pmxt_order_book(outcome_id, exchange, limit?)` | No | Get order book depth |
 | `pmxt_ohlcv(outcome_id, exchange, resolution?, limit?)` | No | Get price candles |
 | `pmxt_trades(outcome_id, exchange, limit?)` | No | Get recent trades |
-| `pmxt_events(query, exchange?, limit?)` | No | Search events (groups of markets) |
+| `pmxt_events(query, exchange?, limit?, sort?, search_in?, slug?)` | No | Search events (groups of markets) |
+| `pmxt_execution_price(outcome_id, exchange, side, amount)` | No | Estimate slippage and execution price |
+| `pmxt_compare_market(query, exchanges?, limit?)` | No | Compare similar markets across exchanges |
 | `pmxt_balance(exchange)` | Yes | Get account balance |
 | `pmxt_positions(exchange)` | Yes | Get open positions |
+| `pmxt_portfolio(exchanges?)` | Yes | Unified balances + positions across exchanges |
 | `pmxt_order(market_id, outcome, amount, side, exchange, price?)` | Yes | Place an order, `outcome` can be `yes`/`no`, a label, or an exact `outcome_id` |
 | `pmxt_arbitrage_scan(query, exchanges?, threshold?)` | No | Cross-exchange spread scan |
+| `pmxt_server_status()` | No | Sidecar diagnostics |
+
+## Supported Exchanges
+
+The package is wired for:
+
+- `polymarket`
+- `polymarket_us`
+- `kalshi`
+- `limitless`
+- `myriad`
+- `opinion`
+- `metaculus`
+- `smarkets`
+
+Actual availability still depends on the installed `pmxt` build.
 
 ## Hermes Skill
 
@@ -84,6 +122,10 @@ export KALSHI_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----..."
 # Limitless
 export LIMITLESS_API_KEY="..."
 export LIMITLESS_PRIVATE_KEY="0x..."
+
+# Polymarket US
+export POLYMARKET_US_API_KEY="..."
+export POLYMARKET_US_PRIVATE_KEY="..."
 ```
 
 ## Project Structure
@@ -93,7 +135,7 @@ hermes-pmxt/
 ├── hermes_pmxt/
 │   ├── __init__.py          # Public API exports
 │   ├── tools.py             # Core tool functions
-│   ├── exchanges.py         # Exchange initialization + caching
+│   ├── exchanges.py         # Exchange initialization + normalization
 ├── skill/
 │   └── SKILL.md             # Hermes agent skill instructions
 ├── examples/
@@ -109,7 +151,15 @@ hermes-pmxt/
 ## Testing
 
 ```bash
+# pip / existing venv
 source .venv/bin/activate
+pip install -e ".[dev]"
+pytest -q
+
+# uv
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 pytest -q
 ```
 

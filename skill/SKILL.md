@@ -1,7 +1,7 @@
 ---
 name: pmxt
-description: Prediction market integration — search markets, check probabilities, detect arbitrage, and trade across Polymarket, Kalshi, and Limitless.
-version: 0.1.0
+description: Prediction market integration — search, compare, and trade across pmxt-supported prediction market exchanges.
+version: 0.2.0
 author: hermes-pmxt
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 # pmxt — Prediction Markets for Hermes
 
 Real-time access to prediction markets for fact-checking, probability analysis,
-arbitrage detection, and order execution.
+arbitrage detection, execution planning, and portfolio inspection.
 
 ## When to Use
 
@@ -27,8 +27,17 @@ arbitrage detection, and order execution.
 ## Setup
 
 ```bash
+# pip
 pip install pmxt
-npm install -g pmxtjs  # Sidecar (auto-managed by SDK)
+
+# uv
+uv pip install pmxt
+
+# If your pmxt install still needs the sidecar, pick one package manager
+npm install -g pmxtjs
+pnpm add -g pmxtjs
+yarn global add pmxtjs
+bun add -g pmxtjs
 ```
 
 No API keys needed for **read-only** operations (search, quote, order book, OHLCV).
@@ -44,16 +53,20 @@ from hermes_pmxt import pmxt_search, pmxt_quote, pmxt_order_book
 
 | Function | Auth | Description |
 |----------|------|-------------|
-| `pmxt_search(query, exchange?, limit?)` | No | Search markets |
+| `pmxt_search(query, exchange?, limit?, sort?, search_in?, slug?)` | No | Search markets |
 | `pmxt_quote(keyword, exchange)` | No | Get YES/NO probabilities |
-| `pmxt_order_book(outcome_id, exchange)` | No | Order book depth |
+| `pmxt_order_book(outcome_id, exchange, limit?)` | No | Order book depth |
 | `pmxt_ohlcv(outcome_id, exchange, res?, limit?)` | No | Price candles |
 | `pmxt_trades(outcome_id, exchange, limit?)` | No | Recent trades |
-| `pmxt_events(query, exchange?, limit?)` | No | Search events |
+| `pmxt_events(query, exchange?, limit?, sort?, search_in?, slug?)` | No | Search events |
+| `pmxt_execution_price(outcome_id, exchange, side, amount)` | No | Slippage estimate |
+| `pmxt_compare_market(query, exchanges?, limit?)` | No | Cross-exchange comparison |
 | `pmxt_balance(exchange)` | Yes | Account balance |
 | `pmxt_positions(exchange)` | Yes | Open positions |
+| `pmxt_portfolio(exchanges?)` | Yes | Unified balances and positions |
 | `pmxt_order(...)` | Yes | Place order, after resolving the market's outcome IDs |
 | `pmxt_arbitrage_scan(query, exchanges?, threshold?)` | No | Cross-exchange spreads |
+| `pmxt_server_status()` | No | Sidecar diagnostics |
 
 ## Procedure
 
@@ -94,13 +107,27 @@ Before calling `pmxt_order()`, fetch the market with `pmxt_search()` or `pmxt_qu
 
 All prices are 0.0-1.0 (probabilities). Always show as percentages to users.
 
+### Rule 6: Use Comparison Before Claiming Disagreement
+
+When a user asks whether exchanges disagree, run `pmxt_compare_market(...)` before
+describing spread differences. Use `pmxt_execution_price(...)` before discussing
+whether a displayed spread is realistically tradable at size.
+
+### Rule 7: Portfolio Calls Need Auth Expectations
+
+`pmxt_portfolio()` aggregates positions and balances across exchanges. Partial errors
+are expected when some exchange credentials are missing; summarize successful
+exchanges clearly instead of treating that as a full failure.
+
 ## Pitfalls
 
-- **Kalshi is slow** for search — prefer Polymarket/Limitless for speed
+- **Kalshi is slower** for search than Polymarket/Limitless
 - **outcome_id vs market_id**: Use `outcome_id` for order book/OHLCV/trades, `market_id` for orders
-- **Sidecar auto-starts** on first call (~1-2s), subsequent calls are instant
+- **Sidecar behavior depends on pmxt version**: use `pmxt_server_status()` to confirm
 - **Prices are 0-1** not dollars — don't confuse
 - **Timestamps are Unix ms** — divide by 1000 for Python datetime
+- **Exchange support depends on installed pmxt build**: this package is wired for Polymarket,
+  Polymarket US, Kalshi, Limitless, Myriad, Opinion, Metaculus, and Smarkets
 
 ## Example Workflow
 

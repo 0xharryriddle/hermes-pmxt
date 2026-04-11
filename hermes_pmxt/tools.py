@@ -10,11 +10,23 @@ These are designed to be called from:
   3. CLI scripts
 """
 
+from __future__ import annotations
+
+import inspect
+import statistics
 import time
 from datetime import datetime
 from typing import Optional
 
-from hermes_pmxt.exchanges import get_exchange, ensure_server
+from hermes_pmxt.exchanges import (
+    EXCHANGES,
+    TRADING_EXCHANGES,
+    available_exchange_names,
+    ensure_server,
+    get_exchange,
+    normalize_exchange_name,
+    server_status,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -42,73 +54,157 @@ def _ensure() -> Optional[dict]:
     return None
 
 
+def _safe_signature_params(func) -> set[str]:
+    """Return inspectable parameter names for a callable, or an empty set."""
+    try:
+        return set(inspect.signature(func).parameters)
+    except (TypeError, ValueError):
+        return set()
+
+
+def _call_method(func, /, *args, **kwargs):
+    """Call a method while dropping unsupported keyword arguments when possible."""
+    if not kwargs:
+        return func(*args)
+
+    params = _safe_signature_params(func)
+    if not params:
+        return func(*args, **kwargs)
+
+    filtered_kwargs = {key: value for key, value in kwargs.items() if key in params}
+    return func(*args, **filtered_kwargs)
+
+
+def _search_call_kwargs(
+    fetch_markets,
+    *,
+    query: str,
+    limit: int,
+    sort: Optional[str],
+    search_in: Optional[str],
+    slug: Optional[str],
+) -> dict:
+    """Build the most compatible fetch_markets kwargs for the installed SDK."""
+    kwargs = {"query": query, "limit": limit}
+    params = _safe_signature_params(fetch_markets)
+
+    if sort is not None and (not params or "sort" in params):
+        kwargs["sort"] = sort
+
+    if search_in is not None:
+        if not params or "searchIn" in params:
+            kwargs["searchIn"] = search_in
+        elif "search_in" in params:
+            kwargs["search_in"] = search_in
+
+    if slug is not None and (not params or "slug" in params):
+        kwargs["slug"] = slug
+
+    return kwargs
+
+
+def _event_call_kwargs(
+    fetch_events,
+    *,
+    query: str,
+    limit: int,
+    sort: Optional[str],
+    search_in: Optional[str],
+    slug: Optional[str],
+) -> dict:
+    """Build the most compatible fetch_events kwargs for the installed SDK."""
+    kwargs = {"query": query, "limit": limit}
+    params = _safe_signature_params(fetch_events)
+
+    if sort is not None and (not params or "sort" in params):
+        kwargs["sort"] = sort
+
+    if search_in is not None:
+        if not params or "searchIn" in params:
+            kwargs["searchIn"] = search_in
+        elif "search_in" in params:
+            kwargs["search_in"] = search_in
+
+    if slug is not None and (not params or "slug" in params):
+        kwargs["slug"] = slug
+
+    return kwargs
+
+
 def _market_dict(m, exchange_name: str = "") -> dict:
     """Convert UnifiedMarket dataclass to serializable dict."""
     outcomes = []
-    for o in (m.outcomes or []):
+    for outcome in (getattr(m, "outcomes", None) or []):
         outcomes.append({
-            "outcome_id": o.outcome_id,
-            "label": o.label,
-            "price": o.price,
-            "price_change_24h": o.price_change_24h,
+            "outcome_id": getattr(outcome, "outcome_id", None),
+            "label": getattr(outcome, "label", ""),
+            "price": getattr(outcome, "price", None),
+            "price_change_24h": getattr(outcome, "price_change_24h", None),
         })
 
-    d = {
-        "market_id": m.market_id,
-        "title": m.title,
-        "description": m.description,
+    data = {
+        "market_id": getattr(m, "market_id", None),
+        "title": getattr(m, "title", ""),
+        "description": getattr(m, "description", ""),
         "outcomes": outcomes,
-        "volume_24h": m.volume_24h or 0,
-        "liquidity": m.liquidity or 0,
-        "url": m.url or "",
-        "status": m.status,
-        "slug": m.slug,
-        "category": m.category,
+        "volume_24h": getattr(m, "volume_24h", 0) or 0,
+        "liquidity": getattr(m, "liquidity", 0) or 0,
+        "url": getattr(m, "url", "") or "",
+        "status": getattr(m, "status", None),
+        "slug": getattr(m, "slug", None),
+        "category": getattr(m, "category", None),
+        "event_id": getattr(m, "event_id", None),
+        "tags": getattr(m, "tags", None),
+        "resolved": getattr(m, "resolved", None),
     }
 
-    # Convenience: yes/no shorthand
-    if m.yes:
-        d["yes_price"] = m.yes.price
-        d["yes_pct"] = f"{m.yes.price * 100:.1f}%"
-    if m.no:
-        d["no_price"] = m.no.price
-        d["no_pct"] = f"{m.no.price * 100:.1f}%"
+    yes = getattr(m, "yes", None)
+    no = getattr(m, "no", None)
+    if yes:
+        data["yes_price"] = yes.price
+        data["yes_pct"] = f"{yes.price * 100:.1f}%"
+    if no:
+        data["no_price"] = no.price
+        data["no_pct"] = f"{no.price * 100:.1f}%"
 
     if exchange_name:
-        d["exchange"] = exchange_name
+        data["exchange"] = exchange_name
 
-    return d
+    return data
 
 
 def _candle_dict(c) -> dict:
     """Convert PriceCandle to dict."""
+    timestamp = getattr(c, "timestamp", None)
     return {
-        "timestamp": c.timestamp,
-        "datetime": datetime.fromtimestamp(c.timestamp / 1000).isoformat(),
-        "open": c.open,
-        "high": c.high,
-        "low": c.low,
-        "close": c.close,
-        "volume": c.volume,
+        "timestamp": timestamp,
+        "datetime": datetime.fromtimestamp(timestamp / 1000).isoformat() if timestamp else None,
+        "open": getattr(c, "open", None),
+        "high": getattr(c, "high", None),
+        "low": getattr(c, "low", None),
+        "close": getattr(c, "close", None),
+        "volume": getattr(c, "volume", None),
     }
 
 
 def _trade_dict(t) -> dict:
     """Convert Trade to dict."""
+    timestamp = getattr(t, "timestamp", None)
     return {
-        "id": t.id,
-        "timestamp": t.timestamp,
-        "datetime": datetime.fromtimestamp(t.timestamp / 1000).isoformat(),
-        "price": t.price,
-        "amount": t.amount,
-        "side": t.side,
+        "id": getattr(t, "id", None),
+        "timestamp": timestamp,
+        "datetime": datetime.fromtimestamp(timestamp / 1000).isoformat() if timestamp else None,
+        "price": getattr(t, "price", None),
+        "amount": getattr(t, "amount", None),
+        "side": getattr(t, "side", None),
     }
 
 
 def _remember_market(exchange_name: str, market) -> None:
     """Cache fetched markets so follow-up order calls can resolve outcome IDs."""
-    if getattr(market, "market_id", None):
-        _market_cache[(exchange_name, market.market_id)] = market
+    market_id = getattr(market, "market_id", None)
+    if market_id:
+        _market_cache[(exchange_name, market_id)] = market
 
 
 def _get_cached_market(exchange_name: str, market_id: str):
@@ -126,6 +222,9 @@ def _resolve_outcome_id(market, outcome: str) -> Optional[str]:
     normalized = outcome.strip().lower()
 
     if not _is_alias_outcome(outcome):
+        for candidate in (getattr(market, "outcomes", None) or []):
+            if (candidate.label or "").strip().lower() == normalized:
+                return candidate.outcome_id
         return outcome.strip()
 
     if normalized == "yes" and getattr(market, "yes", None):
@@ -134,10 +233,41 @@ def _resolve_outcome_id(market, outcome: str) -> Optional[str]:
         return market.no.outcome_id
 
     for candidate in (getattr(market, "outcomes", None) or []):
-        if candidate.label.strip().lower() == normalized:
+        if (candidate.label or "").strip().lower() == normalized:
             return candidate.outcome_id
 
     return None
+
+
+def _extract_yes_no(market_dict: dict) -> tuple[Optional[float], Optional[float]]:
+    """Return YES/NO prices from a serialized market dict."""
+    yes_price = market_dict.get("yes_price")
+    no_price = market_dict.get("no_price")
+
+    if yes_price is not None or no_price is not None:
+        return yes_price, no_price
+
+    for outcome in market_dict.get("outcomes", []):
+        label = (outcome.get("label") or "").strip().lower()
+        if label == "yes":
+            yes_price = outcome.get("price")
+        elif label == "no":
+            no_price = outcome.get("price")
+
+    return yes_price, no_price
+
+
+def _title_overlap(title_a: str, title_b: str) -> float:
+    """Compute a simple token overlap score between titles."""
+    words_a = set(title_a.lower().split())
+    words_b = set(title_b.lower().split())
+    return len(words_a & words_b) / max(len(words_a | words_b), 1)
+
+
+def _default_exchange_targets() -> list[str]:
+    """Return the supported exchange list without assuming the local pmxt build."""
+    discovered = available_exchange_names()
+    return discovered or list(EXCHANGES)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +278,9 @@ def pmxt_search(
     query: str,
     exchange: Optional[str] = None,
     limit: int = 20,
+    sort: Optional[str] = None,
+    search_in: Optional[str] = None,
+    slug: Optional[str] = None,
 ) -> dict:
     """
     Search prediction markets by keyword.
@@ -156,6 +289,9 @@ def pmxt_search(
         query: Broad keyword (e.g. "election", "bitcoin", "trump")
         exchange: Specific exchange name, or None to search all available
         limit: Max results per exchange
+        sort: Optional result sort, if the installed pmxt build supports it
+        search_in: Optional search scope ("title", "description", "both")
+        slug: Optional direct market slug lookup
 
     Returns:
         {"success": True, "data": [market_dicts], "count": N}
@@ -164,7 +300,7 @@ def pmxt_search(
     if err:
         return err
 
-    targets = [exchange] if exchange else ["polymarket", "kalshi", "limitless"]
+    targets = [normalize_exchange_name(exchange)] if exchange else _default_exchange_targets()
 
     all_markets = []
     errors = []
@@ -175,12 +311,25 @@ def pmxt_search(
             errors.append(init_err)
             continue
         try:
-            results = ex.fetch_markets(query=query, limit=limit)
-            for m in results:
-                _remember_market(ex_name, m)
-                all_markets.append(_market_dict(m, ex_name))
+            results = _call_method(
+                ex.fetch_markets,
+                **_search_call_kwargs(
+                    ex.fetch_markets,
+                    query=query,
+                    limit=limit,
+                    sort=sort,
+                    search_in=search_in,
+                    slug=slug,
+                ),
+            )
+            for market in results:
+                _remember_market(ex_name, market)
+                all_markets.append(_market_dict(market, ex_name))
         except Exception as e:
             errors.append(f"{ex_name}: {e}")
+
+    if not all_markets and errors:
+        return _err("; ".join(errors))
 
     resp = _ok(all_markets, count=len(all_markets), exchanges_searched=targets)
     if errors:
@@ -194,96 +343,91 @@ def pmxt_quote(identifier: str, exchange: str) -> dict:
 
     Accepts a keyword/title to search for (recommended) or a market slug.
     Best practice: use a distinctive phrase from the market title.
-
-    Args:
-        identifier: Search keyword or distinctive market title phrase
-                    e.g. "bitcoin 200000" or "trump nominate fed"
-        exchange: Exchange name
-
-    Returns:
-        {"success": True, "data": {"yes": 0.34, "no": 0.66, "yes_pct": "34.0%", ...}}
     """
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)
 
     try:
-        # Search for matching markets
         results = ex.fetch_markets(query=identifier, limit=5)
         if not results:
             return _err(f"No markets found for: {identifier}")
 
-        # Pick the best match — first result is usually most relevant
-        m = results[0]
-        _remember_market(exchange, m)
+        market = results[0]
+        _remember_market(exchange_name, market)
 
-        yes_price = m.yes.price if m.yes else None
-        no_price = m.no.price if m.no else None
+        yes_price = market.yes.price if getattr(market, "yes", None) else None
+        no_price = market.no.price if getattr(market, "no", None) else None
 
-        # Derive missing
         if yes_price is not None and no_price is None:
             no_price = round(1.0 - yes_price, 4)
         elif no_price is not None and yes_price is None:
             yes_price = round(1.0 - no_price, 4)
 
         return _ok({
-            "market_id": m.market_id,
-            "title": m.title,
-            "slug": m.slug,
-            "exchange": exchange,
+            "market_id": market.market_id,
+            "title": market.title,
+            "slug": market.slug,
+            "exchange": exchange_name,
             "yes": yes_price,
             "no": no_price,
             "yes_pct": f"{yes_price * 100:.1f}%" if yes_price is not None else None,
             "no_pct": f"{no_price * 100:.1f}%" if no_price is not None else None,
-            "volume_24h": m.volume_24h or 0,
-            "url": m.url or "",
-            "status": m.status,
-            # Include outcome_ids for follow-up calls
+            "volume_24h": getattr(market, "volume_24h", 0) or 0,
+            "liquidity": getattr(market, "liquidity", 0) or 0,
+            "url": getattr(market, "url", "") or "",
+            "status": getattr(market, "status", None),
             "outcomes": [
-                {"outcome_id": o.outcome_id, "label": o.label, "price": o.price}
-                for o in (m.outcomes or [])
+                {
+                    "outcome_id": getattr(outcome, "outcome_id", None),
+                    "label": getattr(outcome, "label", ""),
+                    "price": getattr(outcome, "price", None),
+                }
+                for outcome in (getattr(market, "outcomes", None) or [])
             ],
         })
     except Exception as e:
-        return _err(f"{exchange}: {e}")
+        return _err(f"{exchange_name}: {e}")
 
 
-def pmxt_order_book(outcome_id: str, exchange: str) -> dict:
+def pmxt_order_book(outcome_id: str, exchange: str, limit: int = 20) -> dict:
     """
     Get the current order book for a market outcome.
 
     Args:
         outcome_id: Outcome ID (the Yes/No token ID, NOT market_id)
         exchange: Exchange name
-
-    Returns:
-        {"success": True, "data": {"bids": [...], "asks": [...], "spread": 0.001}}
+        limit: Max depth levels per side
     """
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)
 
     try:
         book = ex.fetch_order_book(outcome_id)
 
-        bids = [{"price": b.price, "size": b.size} for b in book.bids]
-        asks = [{"price": a.price, "size": a.size} for a in book.asks]
+        bids = [{"price": level.price, "size": level.size} for level in book.bids[:limit]]
+        asks = [{"price": level.price, "size": level.size} for level in book.asks[:limit]]
 
         spread = None
+        mid_price = None
         if bids and asks:
             spread = round(asks[0]["price"] - bids[0]["price"], 6)
+            mid_price = round((asks[0]["price"] + bids[0]["price"]) / 2, 6)
 
         return _ok({
             "outcome_id": outcome_id,
-            "exchange": exchange,
+            "exchange": exchange_name,
             "bids": bids,
             "asks": asks,
             "bid_levels": len(bids),
@@ -292,10 +436,13 @@ def pmxt_order_book(outcome_id: str, exchange: str) -> dict:
             "spread_pct": f"{spread * 100:.2f}%" if spread is not None else None,
             "best_bid": bids[0]["price"] if bids else None,
             "best_ask": asks[0]["price"] if asks else None,
-            "timestamp": book.timestamp,
+            "mid_price": mid_price,
+            "bid_depth": round(sum(level["size"] for level in bids), 4),
+            "ask_depth": round(sum(level["size"] for level in asks), 4),
+            "timestamp": getattr(book, "timestamp", None),
         })
     except Exception as e:
-        return _err(f"{exchange}: {e}")
+        return _err(f"{exchange_name}: {e}")
 
 
 def pmxt_ohlcv(
@@ -307,34 +454,62 @@ def pmxt_ohlcv(
     """
     Get price history candles.
 
-    Args:
-        outcome_id: Outcome ID
-        exchange: Exchange name
-        resolution: "1m", "5m", "1h", "1d"
-        limit: Number of candles
-
-    Returns:
-        {"success": True, "data": [candle_dicts]}
+    Adds basic analytics (change, SMA, RSI) when enough candles are available.
     """
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)
 
     try:
         candles = ex.fetch_ohlcv(outcome_id, resolution=resolution, limit=limit)
+        serialized = [_candle_dict(candle) for candle in candles]
+        analysis = {}
+
+        closes = [candle["close"] for candle in serialized if candle["close"] is not None]
+        if len(closes) >= 2:
+            analysis = {
+                "current_price": closes[-1],
+                "high": max(closes),
+                "low": min(closes),
+                "price_change": round(closes[-1] - closes[0], 4),
+                "price_change_pct": (
+                    f"{((closes[-1] / closes[0]) - 1) * 100:.1f}%"
+                    if closes[0]
+                    else None
+                ),
+            }
+            if len(closes) >= 7:
+                analysis["sma_7"] = round(statistics.mean(closes[-7:]), 4)
+            if len(closes) >= 14:
+                analysis["sma_14"] = round(statistics.mean(closes[-14:]), 4)
+                gains = []
+                losses = []
+                for index in range(1, 15):
+                    change = closes[-index] - closes[-index - 1]
+                    if change > 0:
+                        gains.append(change)
+                    else:
+                        losses.append(abs(change))
+                avg_gain = statistics.mean(gains) if gains else 0
+                avg_loss = statistics.mean(losses) if losses else 0.0001
+                rs = avg_gain / avg_loss
+                analysis["rsi_14"] = round(100 - (100 / (1 + rs)), 1)
+
         return _ok(
-            [_candle_dict(c) for c in candles],
+            serialized,
             outcome_id=outcome_id,
-            exchange=exchange,
+            exchange=exchange_name,
             resolution=resolution,
-            count=len(candles),
+            count=len(serialized),
+            analysis=analysis,
         )
     except Exception as e:
-        return _err(f"{exchange}: {e}")
+        return _err(f"{exchange_name}: {e}")
 
 
 def pmxt_trades(
@@ -345,97 +520,128 @@ def pmxt_trades(
     """
     Get recent trades for an outcome.
 
-    Args:
-        outcome_id: Outcome ID
-        exchange: Exchange name
-        limit: Max trades
-
-    Returns:
-        {"success": True, "data": [trade_dicts]}
+    Includes aggregate trade stats when data is available.
     """
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)
 
     try:
         trades = ex.fetch_trades(outcome_id, limit=limit)
+        serialized = [_trade_dict(trade) for trade in trades]
+        stats = {}
+
+        prices = [trade["price"] for trade in serialized if trade["price"] is not None]
+        amounts = [trade["amount"] for trade in serialized if trade["amount"] is not None]
+        if prices:
+            stats["avg_price"] = round(statistics.mean(prices), 4)
+            stats["min_price"] = min(prices)
+            stats["max_price"] = max(prices)
+            stats["last_price"] = prices[-1]
+        if amounts:
+            stats["total_volume"] = round(sum(amounts), 4)
+            stats["avg_trade_size"] = round(statistics.mean(amounts), 4)
+
         return _ok(
-            [_trade_dict(t) for t in trades],
+            serialized,
             outcome_id=outcome_id,
-            exchange=exchange,
-            count=len(trades),
+            exchange=exchange_name,
+            count=len(serialized),
+            stats=stats,
         )
     except Exception as e:
-        return _err(f"{exchange}: {e}")
+        return _err(f"{exchange_name}: {e}")
 
 
 def pmxt_events(
     query: str,
-    exchange: str = "polymarket",
+    exchange: Optional[str] = None,
     limit: int = 10,
+    sort: Optional[str] = None,
+    search_in: Optional[str] = None,
+    slug: Optional[str] = None,
 ) -> dict:
     """
     Search events (groups of related markets).
 
-    Args:
-        query: Search keyword
-        exchange: Exchange name (Polymarket has events)
-        limit: Max events
-
-    Returns:
-        {"success": True, "data": [event_dicts]}
+    Returns partial errors when some exchanges do not implement event discovery.
     """
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
-    if init_err:
-        return _err(init_err)
+    targets = [normalize_exchange_name(exchange)] if exchange else _default_exchange_targets()
 
-    try:
-        events = ex.fetch_events(query=query, limit=limit)
-        result = []
-        for e in events:
-            markets_summary = []
-            for m in (e.markets or [])[:5]:
-                yes_pct = f"{m.yes.price * 100:.1f}%" if m.yes else "N/A"
-                markets_summary.append({
-                    "market_id": m.market_id,
-                    "title": m.title,
-                    "yes_pct": yes_pct,
+    all_events = []
+    errors = []
+
+    for ex_name in targets:
+        ex, init_err = get_exchange(ex_name)
+        if init_err:
+            errors.append(init_err)
+            continue
+        if not hasattr(ex, "fetch_events"):
+            errors.append(f"{ex_name}: fetch_events not available")
+            continue
+
+        try:
+            events = _call_method(
+                ex.fetch_events,
+                **_event_call_kwargs(
+                    ex.fetch_events,
+                    query=query,
+                    limit=limit,
+                    sort=sort,
+                    search_in=search_in,
+                    slug=slug,
+                ),
+            )
+            for event in events:
+                markets_summary = []
+                for market in (getattr(event, "markets", None) or [])[:5]:
+                    _remember_market(ex_name, market)
+                    yes = getattr(market, "yes", None)
+                    markets_summary.append({
+                        "market_id": getattr(market, "market_id", None),
+                        "title": getattr(market, "title", ""),
+                        "yes_pct": f"{yes.price * 100:.1f}%" if yes else None,
+                    })
+
+                all_events.append({
+                    "event_id": getattr(event, "event_id", None),
+                    "title": getattr(event, "title", ""),
+                    "description": getattr(event, "description", ""),
+                    "slug": getattr(event, "slug", None),
+                    "exchange": ex_name,
+                    "market_count": len(getattr(event, "markets", None) or []),
+                    "top_markets": markets_summary,
+                    "url": getattr(event, "url", ""),
                 })
+        except Exception as e:
+            errors.append(f"{ex_name}: {e}")
 
-            result.append({
-                "title": e.title,
-                "market_count": len(e.markets or []),
-                "top_markets": markets_summary,
-            })
+    if not all_events and errors:
+        return _err("; ".join(errors))
 
-        return _ok(result, exchange=exchange, count=len(result))
-    except Exception as e:
-        return _err(f"{exchange}: {e}")
+    resp = _ok(all_events, count=len(all_events), exchanges_searched=targets)
+    if errors:
+        resp["partial_errors"] = errors
+    return resp
 
 
 def pmxt_balance(exchange: str) -> dict:
-    """
-    Get account balance. Requires exchange credentials.
-
-    Args:
-        exchange: Exchange name
-
-    Returns:
-        {"success": True, "data": [{"currency": "USD", "available": 100.0, ...}]}
-    """
+    """Get account balance. Requires exchange credentials."""
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)
 
@@ -444,34 +650,27 @@ def pmxt_balance(exchange: str) -> dict:
         return _ok(
             [
                 {
-                    "currency": b.currency,
-                    "available": b.available,
-                    "total": b.total,
-                    "locked": b.locked,
+                    "currency": getattr(balance, "currency", None),
+                    "available": getattr(balance, "available", None),
+                    "total": getattr(balance, "total", None),
+                    "locked": getattr(balance, "locked", None),
                 }
-                for b in balances
+                for balance in balances
             ],
-            exchange=exchange,
+            exchange=exchange_name,
         )
     except Exception as e:
-        return _err(f"{exchange}: {e}. Ensure credentials are configured.")
+        return _err(f"{exchange_name}: {e}. Ensure credentials are configured.")
 
 
 def pmxt_positions(exchange: str) -> dict:
-    """
-    Get open positions. Requires exchange credentials.
-
-    Args:
-        exchange: Exchange name
-
-    Returns:
-        {"success": True, "data": [position_dicts]}
-    """
+    """Get open positions. Requires exchange credentials."""
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)
 
@@ -480,21 +679,34 @@ def pmxt_positions(exchange: str) -> dict:
         return _ok(
             [
                 {
-                    "market_id": p.market_id,
-                    "outcome_id": p.outcome_id,
-                    "outcome_label": p.outcome_label,
-                    "size": p.size,
-                    "entry_price": p.entry_price,
-                    "current_price": p.current_price,
-                    "unrealized_pnl": p.unrealized_pnl,
-                    "realized_pnl": p.realized_pnl,
+                    "market_id": getattr(position, "market_id", None),
+                    "title": getattr(position, "title", ""),
+                    "outcome_id": getattr(position, "outcome_id", None),
+                    "outcome_label": getattr(
+                        position,
+                        "outcome_label",
+                        getattr(position, "outcome", ""),
+                    ),
+                    "size": getattr(position, "size", 0),
+                    "entry_price": getattr(
+                        position,
+                        "entry_price",
+                        getattr(position, "avg_price", None),
+                    ),
+                    "current_price": getattr(position, "current_price", None),
+                    "unrealized_pnl": getattr(
+                        position,
+                        "unrealized_pnl",
+                        getattr(position, "pnl", None),
+                    ),
+                    "realized_pnl": getattr(position, "realized_pnl", None),
                 }
-                for p in positions
+                for position in positions
             ],
-            exchange=exchange,
+            exchange=exchange_name,
         )
     except Exception as e:
-        return _err(f"{exchange}: {e}. Ensure credentials are configured.")
+        return _err(f"{exchange_name}: {e}. Ensure credentials are configured.")
 
 
 def pmxt_order(
@@ -510,28 +722,18 @@ def pmxt_order(
 
     IMPORTANT: Never call without explicit user confirmation including
     market, outcome, amount, and exchange.
-
-    Args:
-        market_id: Market ID
-        outcome: "yes" / "no", an exact outcome label, or an exact outcome_id
-        amount: Number of shares
-        side: "buy" or "sell"
-        exchange: Exchange name
-        price: Limit price (0.0-1.0). None for market order.
-
-    Returns:
-        {"success": True, "data": {order_details}}
     """
     err = _ensure()
     if err:
         return err
 
-    ex, init_err = get_exchange(exchange)
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)
 
     try:
-        cached_market = _get_cached_market(exchange, market_id)
+        cached_market = _get_cached_market(exchange_name, market_id)
         outcome_id = None
         if cached_market is not None:
             outcome_id = _resolve_outcome_id(cached_market, outcome)
@@ -558,20 +760,273 @@ def pmxt_order(
         order = ex.create_order(**order_params)
 
         return _ok({
-            "order_id": order.id,
-            "market_id": order.market_id,
-            "outcome_id": order.outcome_id,
-            "side": order.side,
-            "type": order.type,
-            "amount": order.amount,
-            "price": order.price,
-            "status": order.status,
-            "filled": order.filled,
-            "remaining": order.remaining,
-            "timestamp": order.timestamp,
-        }, exchange=exchange)
+            "order_id": getattr(order, "id", None),
+            "market_id": getattr(order, "market_id", market_id),
+            "outcome_id": getattr(order, "outcome_id", outcome_id),
+            "side": getattr(order, "side", side),
+            "type": getattr(order, "type", order_params["type"]),
+            "amount": getattr(order, "amount", amount),
+            "price": getattr(order, "price", price),
+            "status": getattr(order, "status", None),
+            "filled": getattr(order, "filled", None),
+            "remaining": getattr(order, "remaining", None),
+            "timestamp": getattr(order, "timestamp", None),
+        }, exchange=exchange_name)
     except Exception as e:
-        return _err(f"{exchange}: {e}. Ensure credentials are configured.")
+        return _err(f"{exchange_name}: {e}. Ensure credentials are configured.")
+
+
+def pmxt_execution_price(
+    outcome_id: str,
+    exchange: str,
+    side: str,
+    amount: float,
+) -> dict:
+    """
+    Estimate execution price and slippage for a target order size.
+
+    Uses the exchange helper if available, otherwise calculates manually from
+    the visible order book.
+    """
+    err = _ensure()
+    if err:
+        return err
+
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
+    if init_err:
+        return _err(init_err)
+
+    try:
+        book = ex.fetch_order_book(outcome_id)
+        levels = book.asks if side == "buy" else book.bids
+        best_price = levels[0].price if levels else None
+
+        detailed_method = getattr(ex, "get_execution_price_detailed", None)
+        if callable(detailed_method):
+            try:
+                detailed = detailed_method(book, side, amount)
+                estimated = getattr(detailed, "price", None)
+                slippage = (
+                    round(abs(estimated - best_price), 6)
+                    if estimated is not None and best_price is not None
+                    else None
+                )
+                return _ok(
+                    {
+                        "estimated_price": estimated,
+                        "best_price": best_price,
+                        "slippage": slippage,
+                        "slippage_pct": (
+                            f"{(slippage / best_price) * 100:.2f}%"
+                            if slippage is not None and best_price
+                            else None
+                        ),
+                        "filled_amount": getattr(detailed, "filled_amount", amount),
+                        "requested_amount": amount,
+                        "side": side,
+                    },
+                    outcome_id=outcome_id,
+                    exchange=exchange_name,
+                )
+            except TypeError:
+                pass
+
+        price_method = getattr(ex, "get_execution_price", None)
+        if callable(price_method):
+            for call_args in ((book, side, amount), (outcome_id, side, amount)):
+                try:
+                    estimated = price_method(*call_args)
+                    slippage = (
+                        round(abs(estimated - best_price), 6)
+                        if estimated is not None and best_price is not None
+                        else None
+                    )
+                    return _ok(
+                        {
+                            "estimated_price": estimated,
+                            "best_price": best_price,
+                            "slippage": slippage,
+                            "slippage_pct": (
+                                f"{(slippage / best_price) * 100:.2f}%"
+                                if slippage is not None and best_price
+                                else None
+                            ),
+                            "requested_amount": amount,
+                            "side": side,
+                        },
+                        outcome_id=outcome_id,
+                        exchange=exchange_name,
+                    )
+                except TypeError:
+                    continue
+
+        remaining = amount
+        total_value = 0.0
+        for level in levels:
+            fill = min(remaining, level.size)
+            total_value += fill * level.price
+            remaining -= fill
+            if remaining <= 0:
+                break
+
+        if remaining > 0:
+            return _err(
+                f"Insufficient liquidity for {amount} contracts. "
+                f"Only {round(amount - remaining, 4)} available in the visible book."
+            )
+
+        estimated_price = total_value / amount if amount else 0
+        slippage = (
+            round(abs(estimated_price - best_price), 6)
+            if best_price is not None
+            else None
+        )
+        return _ok(
+            {
+                "estimated_price": round(estimated_price, 6),
+                "best_price": best_price,
+                "slippage": slippage,
+                "slippage_pct": (
+                    f"{(slippage / best_price) * 100:.2f}%"
+                    if slippage is not None and best_price
+                    else None
+                ),
+                "total_value": round(total_value, 6),
+                "requested_amount": amount,
+                "side": side,
+            },
+            outcome_id=outcome_id,
+            exchange=exchange_name,
+        )
+    except Exception as e:
+        return _err(f"{exchange_name}: {e}")
+
+
+def pmxt_compare_market(
+    query: str,
+    exchanges: Optional[list[str]] = None,
+    limit: int = 5,
+) -> dict:
+    """
+    Compare similar market matches across exchanges for a single query.
+
+    Returns grouped comparisons with per-exchange prices and simple spread stats.
+    """
+    targets = [normalize_exchange_name(name) for name in (exchanges or ["polymarket", "kalshi"])]
+
+    search_results = {}
+    for ex_name in targets:
+        result = pmxt_search(query, exchange=ex_name, limit=limit)
+        if result["success"] and result["data"]:
+            search_results[ex_name] = result["data"]
+
+    if not search_results:
+        return _err("No comparable markets found on any exchange")
+
+    comparisons = []
+    for markets in search_results.values():
+        for market in markets:
+            matched_group = None
+            for group in comparisons:
+                if _title_overlap(group["title"], market["title"]) >= 0.45:
+                    matched_group = group
+                    break
+            if matched_group is None:
+                matched_group = {"title": market["title"], "markets": []}
+                comparisons.append(matched_group)
+            matched_group["markets"].append(market)
+
+    result_groups = []
+    for group in comparisons:
+        quotes = []
+        yes_prices = []
+        no_prices = []
+
+        for market in group["markets"]:
+            yes_price, no_price = _extract_yes_no(market)
+            if yes_price is not None:
+                yes_prices.append(yes_price)
+            if no_price is not None:
+                no_prices.append(no_price)
+            quotes.append({
+                "exchange": market.get("exchange"),
+                "market_id": market.get("market_id"),
+                "slug": market.get("slug"),
+                "yes_price": yes_price,
+                "no_price": no_price,
+                "volume_24h": market.get("volume_24h", 0),
+                "liquidity": market.get("liquidity", 0),
+                "url": market.get("url", ""),
+            })
+
+        result_groups.append({
+            "title": group["title"],
+            "quotes": quotes,
+            "exchange_count": len(quotes),
+            "yes_spread": round(max(yes_prices) - min(yes_prices), 6) if len(yes_prices) >= 2 else None,
+            "no_spread": round(max(no_prices) - min(no_prices), 6) if len(no_prices) >= 2 else None,
+        })
+
+    return _ok(result_groups, count=len(result_groups), exchanges_compared=targets)
+
+
+def pmxt_portfolio(exchanges: Optional[list[str]] = None) -> dict:
+    """
+    Build a unified portfolio view across multiple exchanges.
+
+    Aggregates balances and open positions while tolerating per-exchange auth gaps.
+    """
+    targets = [normalize_exchange_name(name) for name in (exchanges or list(TRADING_EXCHANGES))]
+    positions = []
+    balances = []
+    errors = []
+
+    total_notional = 0.0
+    total_unrealized_pnl = 0.0
+
+    for ex_name in targets:
+        balance_result = pmxt_balance(ex_name)
+        if balance_result["success"]:
+            balances.append({
+                "exchange": ex_name,
+                "balances": balance_result["data"],
+            })
+        else:
+            errors.append(balance_result["error"])
+
+        positions_result = pmxt_positions(ex_name)
+        if positions_result["success"]:
+            for position in positions_result["data"]:
+                normalized_position = dict(position)
+                normalized_position["exchange"] = ex_name
+                positions.append(normalized_position)
+
+                size = normalized_position.get("size") or 0
+                current_price = normalized_position.get("current_price") or 0
+                unrealized = normalized_position.get("unrealized_pnl")
+
+                total_notional += size * current_price
+                if unrealized is not None:
+                    total_unrealized_pnl += unrealized
+        else:
+            errors.append(positions_result["error"])
+
+    return _ok(
+        {
+            "balances": balances,
+            "positions": positions,
+            "summary": {
+                "exchange_count": len(targets),
+                "exchanges_with_positions": sorted({position["exchange"] for position in positions}),
+                "total_positions": len(positions),
+                "total_notional": round(total_notional, 4),
+                "total_unrealized_pnl": round(total_unrealized_pnl, 4),
+            },
+        },
+        exchanges=targets,
+        partial_errors=errors or None,
+    )
 
 
 def pmxt_arbitrage_scan(
@@ -584,56 +1039,41 @@ def pmxt_arbitrage_scan(
 
     Finds the same topic on multiple exchanges and checks if YES on one + NO
     on another sums below 1.0 (risk-free profit).
-
-    Args:
-        query: Search keyword
-        exchanges: Exchanges to compare (default: polymarket + kalshi)
-        threshold: Alert if combined price < threshold
-
-    Returns:
-        {"success": True, "data": [opportunity_dicts], "count": N}
     """
-    exchanges = exchanges or ["polymarket", "kalshi"]
+    exchange_names = [normalize_exchange_name(name) for name in (exchanges or ["polymarket", "kalshi"])]
 
-    # Search each exchange
     results = {}
-    for ex_name in exchanges:
-        r = pmxt_search(query, exchange=ex_name, limit=10)
-        if r["success"] and r["data"]:
-            results[ex_name] = r["data"]
+    for ex_name in exchange_names:
+        result = pmxt_search(query, exchange=ex_name, limit=10)
+        if result["success"] and result["data"]:
+            results[ex_name] = result["data"]
 
     if len(results) < 2:
         return _err("Need results from at least 2 exchanges for arbitrage scan")
 
     opportunities = []
-    ex_names = list(results.keys())
+    names = list(results.keys())
 
-    for i, ex_a in enumerate(ex_names):
-        for ex_b in ex_names[i + 1:]:
-            for m_a in results[ex_a]:
-                for m_b in results[ex_b]:
-                    # Simple title overlap matching
-                    words_a = set(m_a["title"].lower().split())
-                    words_b = set(m_b["title"].lower().split())
-                    overlap = len(words_a & words_b) / max(len(words_a | words_b), 1)
-
-                    if overlap < 0.4:
+    for index, ex_a in enumerate(names):
+        for ex_b in names[index + 1:]:
+            for market_a in results[ex_a]:
+                for market_b in results[ex_b]:
+                    if _title_overlap(market_a["title"], market_b["title"]) < 0.4:
                         continue
 
-                    # Check YES(a) + NO(b) < threshold
-                    yes_a = m_a.get("yes_price")
-                    no_b = m_b.get("no_price")
+                    yes_a, no_a = _extract_yes_no(market_a)
+                    yes_b, no_b = _extract_yes_no(market_b)
 
                     if yes_a is not None and no_b is not None:
                         combined = round(yes_a + no_b, 4)
                         if combined < threshold:
                             opportunities.append({
                                 "strategy": "buy_yes_a_sell_no_b",
-                                "market_a": m_a["title"],
+                                "market_a": market_a["title"],
                                 "exchange_a": ex_a,
                                 "yes_price_a": yes_a,
                                 "yes_pct_a": f"{yes_a * 100:.1f}%",
-                                "market_b": m_b["title"],
+                                "market_b": market_b["title"],
                                 "exchange_b": ex_b,
                                 "no_price_b": no_b,
                                 "no_pct_b": f"{no_b * 100:.1f}%",
@@ -641,20 +1081,16 @@ def pmxt_arbitrage_scan(
                                 "profit_margin": f"{(1 - combined) * 100:.1f}%",
                             })
 
-                    # Also check NO(a) + YES(b)
-                    no_a = m_a.get("no_price")
-                    yes_b = m_b.get("yes_price")
-
                     if no_a is not None and yes_b is not None:
                         combined = round(no_a + yes_b, 4)
                         if combined < threshold:
                             opportunities.append({
                                 "strategy": "buy_no_a_sell_yes_b",
-                                "market_a": m_a["title"],
+                                "market_a": market_a["title"],
                                 "exchange_a": ex_a,
                                 "no_price_a": no_a,
                                 "no_pct_a": f"{no_a * 100:.1f}%",
-                                "market_b": m_b["title"],
+                                "market_b": market_b["title"],
                                 "exchange_b": ex_b,
                                 "yes_price_b": yes_b,
                                 "yes_pct_b": f"{yes_b * 100:.1f}%",
@@ -665,7 +1101,7 @@ def pmxt_arbitrage_scan(
     return _ok(
         opportunities,
         count=len(opportunities),
-        exchanges_scanned=exchanges,
+        exchanges_scanned=exchange_names,
         threshold=threshold,
     )
 
@@ -676,13 +1112,18 @@ def pmxt_arbitrage_scan(
 
 def pmxt_server_health() -> dict:
     """Check if pmxt sidecar server is healthy."""
-    from hermes_pmxt.exchanges import server_status
+    return _ok(server_status())
+
+
+def pmxt_server_status() -> dict:
+    """Return pmxt sidecar status details."""
     return _ok(server_status())
 
 
 def pmxt_server_start() -> dict:
     """Start the pmxt sidecar server."""
     import pmxt
+
     try:
         pmxt.server.start()
         time.sleep(1.5)
@@ -694,6 +1135,7 @@ def pmxt_server_start() -> dict:
 def pmxt_server_stop() -> dict:
     """Stop the pmxt sidecar server."""
     import pmxt
+
     try:
         pmxt.server.stop()
         return _ok({"stopped": True})
