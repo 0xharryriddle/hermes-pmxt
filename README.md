@@ -17,33 +17,51 @@ Agent: "The market implies a 1.9% chance (No: 98.1%). Polymarket is pricing this
 
 ## Installation
 
-Install directly with `pip`, matching the one-command style used by Hermes plugins such
-as Mnemosyne. You do not need to clone this repository unless you are developing it.
+The PyPI package is live. For most users, this is the whole install:
 
 ```bash
-pip install "git+https://github.com/0xharryriddle/hermes-pmxt.git"
+pip install hermes-pmxt
 ```
 
-For local development from a checkout:
+Verify it works:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+python3 -c "from hermes_pmxt import pmxt_runtime_status; print(pmxt_runtime_status())"
 ```
 
 ### Hermes Skill Setup
 
-After installing the package, copy or symlink `skill/SKILL.md` into your Hermes skills
-directory so agents know when and how to use the tools. Example:
+Install the Hermes skill file so your agent knows when to use the package:
 
 ```bash
 mkdir -p ~/.hermes/skills/pmxt
-cp skill/SKILL.md ~/.hermes/skills/pmxt/SKILL.md
+curl -fsSL https://raw.githubusercontent.com/0xharryriddle/hermes-pmxt/main/skill/SKILL.md \
+  -o ~/.hermes/skills/pmxt/SKILL.md
 ```
 
-If your Hermes install supports GitHub-backed skill/plugin installation, point it at
-`https://github.com/0xharryriddle/hermes-pmxt` and enable the `pmxt` skill.
+If your Hermes install supports GitHub-backed skill/plugin installation, use:
+
+```text
+https://github.com/0xharryriddle/hermes-pmxt
+```
+
+### Upgrade
+
+```bash
+pip install --upgrade hermes-pmxt
+```
+
+### Development Install
+
+Only clone the repo if you are modifying hermes-pmxt itself:
+
+```bash
+git clone https://github.com/0xharryriddle/hermes-pmxt.git
+cd hermes-pmxt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
 
 ## Modes
 

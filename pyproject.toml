@@ -9,6 +9,11 @@ dependencies = [
     "pmxt>=2.50.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/0xharryriddle/hermes-pmxt"
+Repository = "https://github.com/0xharryriddle/hermes-pmxt"
+Issues = "https://github.com/0xharryriddle/hermes-pmxt/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
