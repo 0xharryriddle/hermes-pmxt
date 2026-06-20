@@ -1,17 +1,18 @@
 [project]
 name = "hermes-pmxt"
-version = "0.2.0"
-description = "Prediction market integration for Hermes Agent — search, compare, and trade across prediction market exchanges via pmxt"
+version = "0.3.0"
+description = "Prediction market integration for Hermes Agent -- search, compare, and trade across prediction market exchanges via pmxt"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-    "pmxt>=2.27.0",
+    "pmxt>=2.50.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-mock>=3.0",
     "ruff>=0.4",
 ]
 
@@ -22,3 +23,12 @@ build-backend = "hatchling.build"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests that work without pmxt installed or network access",
+    "integration: Integration tests that require pmxt and/or network access",
+    "trading: Trading tests that spend real money -- disabled by default",
+]

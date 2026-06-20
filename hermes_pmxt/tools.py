@@ -18,15 +18,24 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from hermes_pmxt.config import get_base_url, get_mode, runtime_status as _runtime_status_dict
 from hermes_pmxt.exchanges import (
     EXCHANGES,
     TRADING_EXCHANGES,
     available_exchange_names,
     ensure_server,
     get_exchange,
+    is_pmxt_available,
     normalize_exchange_name,
     server_status,
 )
+from hermes_pmxt.registry import (
+    EXCHANGE_ALIASES,
+    KNOWN_EXCHANGES,
+    get_tool,
+    is_destructive as _is_destructive,
+)
+from hermes_pmxt.shaper import shape_result
 
 
 # ---------------------------------------------------------------------------
@@ -1104,6 +1113,317 @@ def pmxt_arbitrage_scan(
         exchanges_scanned=exchange_names,
         threshold=threshold,
     )
+
+
+# ---------------------------------------------------------------------------
+# Runtime / Discovery Helpers
+# ---------------------------------------------------------------------------
+
+def pmxt_runtime_status() -> dict:
+    """
+    Return comprehensive runtime status including mode, config, and pmxt version.
+
+    Works without pmxt installed; returns pmxt_installed=False if absent.
+    """
+    return _ok(_runtime_status_dict(), version=__import__("hermes_pmxt").__version__)
+
+
+def pmxt_list_exchanges() -> dict:
+    """
+    Return all known exchanges with aliases and availability info.
+
+    Reports which exchanges are available in the installed pmxt build.
+    """
+    available = available_exchange_names() if is_pmxt_available() else []
+    return _ok({
+        "known": list(KNOWN_EXCHANGES),
+        "aliases": dict(EXCHANGE_ALIASES),
+        "available": available,
+        "mode": get_mode(),
+        "base_url": get_base_url(),
+    })
+
+
+_DESTRUCTIVE_CONFIRM_MSG = (
+    "Operation '{}' is destructive and requires explicit user confirmation. "
+    "Set confirmed=True after the user has approved the full order details "
+    "(exchange, market, outcome, side, amount, price/type)."
+)
+
+
+def _require_confirmed(method: str, confirmed: bool = False) -> Optional[dict]:
+    """Return an error dict if a destructive operation is not confirmed."""
+    if not confirmed:
+        return _err(_DESTRUCTIVE_CONFIRM_MSG.format(method))
+    return None
+
+
+def _resolve_method_on_exchange(ex: object, method_name: str, *args):
+    """
+    Try to call a named method on an exchange, falling back to call_api.
+
+    Returns the raw result from the PMXT SDK.
+    """
+    method = getattr(ex, method_name, None)
+    if callable(method):
+        return method(*args)
+
+    # Fallback: try call_api or generic HTTP
+    call_api = getattr(ex, "call_api", None)
+    if callable(call_api):
+        return call_api(method_name, *args)
+
+    raise AttributeError(
+        f"Exchange does not support {method_name} and has no call_api fallback"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Generic pmxt_call
+# ---------------------------------------------------------------------------
+
+def pmxt_call(
+    method: str,
+    exchange: str,
+    params: Optional[dict] = None,
+    args: Optional[list] = None,
+    credentials: Optional[dict] = None,
+    *,
+    confirmed: bool = False,
+    verbose: bool = False,
+) -> dict:
+    """
+    Generic PMXT API call using the tool registry and PMXT SDK.
+
+    Args:
+        method: PMXT method name (e.g. 'fetchMarkets', 'compareMarketPrices')
+        exchange: Exchange name (canonical or alias)
+        params: Flat params dict (mapped to positional args per registry)
+        args: Raw positional args list (overrides params if provided)
+        credentials: Optional venue credentials dict
+        confirmed: Required True for destructive operations (createOrder, etc.)
+        verbose: Return raw output instead of compact shaped result
+
+    Returns:
+        Standard {success, data, error?, meta?} dict with shaped results
+    """
+    err = _ensure()
+    if err:
+        return err
+
+    tool = get_tool(method)
+    if tool is None:
+        return _err(f"Unknown PMXT method: {method}")
+
+    if _is_destructive(method):
+        block = _require_confirmed(method, confirmed)
+        if block:
+            return block
+
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
+    if init_err:
+        return _err(init_err)
+
+    try:
+        if args is not None:
+            raw = _resolve_method_on_exchange(ex, method, *args)
+        else:
+            raw = _resolve_method_on_exchange(ex, method, params or {})
+
+        shaped = shape_result(method, raw, verbose=verbose)
+        shaped["meta"] = {
+            "method": method,
+            "exchange": exchange_name,
+            "mode": get_mode(),
+        }
+        return _ok(shaped)
+    except Exception as e:
+        return _err(f"{exchange_name}/{method}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Safer Order Management
+# ---------------------------------------------------------------------------
+
+def pmxt_build_order(
+    market_id: Optional[str] = None,
+    outcome_id: Optional[str] = None,
+    side: str = "buy",
+    order_type: str = "limit",
+    amount: float = 0.0,
+    price: Optional[float] = None,
+    exchange: str = "polymarket",
+    *,
+    outcome: Optional[str] = None,
+    denom: str = "usdc",
+    slippage_pct: Optional[float] = 30.0,
+) -> dict:
+    """
+    Build (sign/preview) an order without submitting it.
+
+    Safe to call -- does NOT place a real order. Returns a built payload
+    that can be inspected before calling pmxt_submit_order().
+
+    Args:
+        market_id: Market UUID or slug
+        outcome_id: Outcome token ID
+        side: 'buy' or 'sell'
+        order_type: 'market' or 'limit'
+        amount: Contract amount
+        price: Limit price (required for limit orders)
+        exchange: Exchange name
+        outcome: Friendly 'yes'/'no' or label -- resolved to outcome_id
+        denom: 'usdc' or 'shares'
+        slippage_pct: Slippage percentage for market orders
+    """
+    err = _ensure()
+    if err:
+        return err
+
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
+    if init_err:
+        return _err(init_err)
+
+    # Resolve friendly outcome to outcome_id if needed
+    resolved_outcome_id = outcome_id
+    if outcome is not None and outcome_id is None:
+        cached = _get_cached_market(exchange_name, market_id or "")
+        if cached is not None:
+            resolved_outcome_id = _resolve_outcome_id(cached, outcome)
+        elif not _is_alias_outcome(outcome):
+            resolved_outcome_id = outcome.strip()
+        if resolved_outcome_id is None:
+            return _err(
+                "Could not resolve outcome. Run pmxt_search() first, then pass "
+                "'yes'/'no' or an exact outcome_id."
+            )
+
+    if side not in ("buy", "sell"):
+        return _err("side must be 'buy' or 'sell'")
+    if order_type not in ("market", "limit"):
+        return _err("order_type must be 'market' or 'limit'")
+    if order_type == "limit" and price is None:
+        return _err("price is required for limit orders")
+    if amount <= 0:
+        return _err("amount must be positive")
+
+    try:
+        build_method = getattr(ex, "build_order", None)
+        if not callable(build_method):
+            return _err(f"{exchange_name}: build_order is not available in this pmxt version")
+
+        built = build_method(
+            market_id=market_id,
+            outcome_id=resolved_outcome_id,
+            side=side,
+            order_type=order_type,
+            amount=amount,
+            price=price,
+            denom=denom,
+            slippage_pct=slippage_pct,
+        )
+
+        # Serialize built order details for agent inspection
+        return _ok({
+            "market_id": getattr(built, "market_id", market_id),
+            "outcome_id": getattr(built, "outcome_id", resolved_outcome_id),
+            "side": side,
+            "order_type": order_type,
+            "amount": amount,
+            "price": price,
+            "denom": denom,
+            "built": {
+                "expiry": getattr(built, "expiry", None),
+            },
+            "preview": True,
+            "note": "Order built but NOT submitted. Call pmxt_submit_order() with confirmed=True to place it.",
+        }, exchange=exchange_name)
+    except Exception as e:
+        return _err(f"{exchange_name}/build_order: {e}")
+
+
+def pmxt_submit_order(
+    built: dict,
+    exchange: str,
+    *,
+    confirmed: bool = False,
+) -> dict:
+    """
+    Submit a pre-built order. DESTRUCTIVE -- requires confirmed=True.
+
+    The built payload must come from pmxt_build_order().
+    """
+    block = _require_confirmed("submit_order", confirmed)
+    if block:
+        return block
+
+    err = _ensure()
+    if err:
+        return err
+
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
+    if init_err:
+        return _err(init_err)
+
+    try:
+        submit_method = getattr(ex, "submit_order", None)
+        if not callable(submit_method):
+            return _err(f"{exchange_name}: submit_order is not available")
+
+        order = submit_method(built)
+        return _ok({
+            "order_id": getattr(order, "id", None),
+            "market_id": getattr(order, "market_id", None),
+            "outcome_id": getattr(order, "outcome_id", None),
+            "side": getattr(order, "side", None),
+            "type": getattr(order, "type", None),
+            "amount": getattr(order, "amount", None),
+            "price": getattr(order, "price", None),
+            "status": getattr(order, "status", None),
+            "filled": getattr(order, "filled", None),
+            "remaining": getattr(order, "remaining", None),
+        }, exchange=exchange_name)
+    except Exception as e:
+        return _err(f"{exchange_name}/submit_order: {e}")
+
+
+def pmxt_cancel_order(
+    order_id: str,
+    exchange: str,
+    *,
+    confirmed: bool = False,
+) -> dict:
+    """
+    Cancel an open order. DESTRUCTIVE -- requires confirmed=True.
+    """
+    block = _require_confirmed("cancel_order", confirmed)
+    if block:
+        return block
+
+    err = _ensure()
+    if err:
+        return err
+
+    exchange_name = normalize_exchange_name(exchange)
+    ex, init_err = get_exchange(exchange_name)
+    if init_err:
+        return _err(init_err)
+
+    try:
+        cancel_method = getattr(ex, "cancel_order", None)
+        if not callable(cancel_method):
+            return _err(f"{exchange_name}: cancel_order is not available")
+
+        result = cancel_method(order_id)
+        return _ok({
+            "order_id": order_id,
+            "status": getattr(result, "status", "cancelled"),
+        }, exchange=exchange_name)
+    except Exception as e:
+        return _err(f"{exchange_name}/cancel_order: {e}")
 
 
 # ---------------------------------------------------------------------------
