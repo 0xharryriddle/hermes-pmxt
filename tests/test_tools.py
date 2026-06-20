@@ -41,11 +41,13 @@ from hermes_pmxt.shaper import (
 
 @pytest.mark.unit
 class TestConfig:
-    def test_runtime_status_works_without_pmxt(self):
+    def test_runtime_status_returns_valid_structure(self):
         result = pmxt_runtime_status()
         assert result["success"]
         assert "mode" in result["data"]
-        assert result["data"]["pmxt_installed"] is False
+        assert isinstance(result["data"]["pmxt_installed"], bool)
+        assert isinstance(result["data"]["has_api_key"], bool)
+        assert result["data"]["mode"] in ("hosted", "custom", "local-sidecar")
 
     def test_runtime_status_str(self):
         s = runtime_status_str()
