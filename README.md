@@ -17,12 +17,14 @@ Agent: "The market implies a 1.9% chance (No: 98.1%). Polymarket is pricing this
 
 ## Installation
 
+Install directly with `pip`, matching the one-command style used by Hermes plugins such
+as Mnemosyne. You do not need to clone this repository unless you are developing it.
+
 ```bash
-git clone https://github.com/0xharryriddle/hermes-pmxt.git
-cd hermes-pmxt
+pip install "git+https://github.com/0xharryriddle/hermes-pmxt.git"
 ```
 
-### Option A: pip
+For local development from a checkout:
 
 ```bash
 python3 -m venv .venv
@@ -30,13 +32,18 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### Option B: uv
+### Hermes Skill Setup
+
+After installing the package, copy or symlink `skill/SKILL.md` into your Hermes skills
+directory so agents know when and how to use the tools. Example:
 
 ```bash
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+mkdir -p ~/.hermes/skills/pmxt
+cp skill/SKILL.md ~/.hermes/skills/pmxt/SKILL.md
 ```
+
+If your Hermes install supports GitHub-backed skill/plugin installation, point it at
+`https://github.com/0xharryriddle/hermes-pmxt` and enable the `pmxt` skill.
 
 ## Modes
 

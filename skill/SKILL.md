@@ -26,8 +26,11 @@ arbitrage detection, execution planning, and portfolio inspection.
 
 ## Setup
 
+Install the Hermes integration package directly; it brings in `pmxt>=2.50.0`. Do not
+instruct users to clone the repo unless they are developing the integration.
+
 ```bash
-pip install pmxt>=2.50.0
+pip install "git+https://github.com/0xharryriddle/hermes-pmxt.git"
 
 # Check runtime status
 python3 -c "from hermes_pmxt import pmxt_runtime_status; print(pmxt_runtime_status())"
@@ -35,6 +38,10 @@ python3 -c "from hermes_pmxt import pmxt_runtime_status; print(pmxt_runtime_stat
 
 Hosted mode (recommended): set `PMXT_API_KEY` env var. Local sidecar mode works
 without an API key but requires pmxt-core running on localhost:3847.
+
+If Hermes needs an explicit skill install, copy this skill file to
+`~/.hermes/skills/pmxt/SKILL.md` or use your Hermes skill/plugin installer with the
+GitHub URL `https://github.com/0xharryriddle/hermes-pmxt`.
 
 ## Quick Reference
 
