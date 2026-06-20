@@ -1,66 +1,111 @@
-# Learnings — Building hermes-pmxt
+# Learnings -- Building hermes-pmxt v0.3.0
 
-Things discovered during implementation that differ from the docs/research.
+Things discovered during upgrade that differ from docs/research.
 
-## pmxt SDK Realities
+## pmxt SDK Realities (v2.50.x)
+
+### Version metadata is inconsistent across sources
+- PyPI: `pmxt 2.50.16`
+- Raw Python pyproject.toml in monorepo: `2.18.0`
+- monorepo package.json: `pmxtjs ^2.17.1`
+- Generated pmxt-mcp tools.ts: `2.50.16` (2026-06-18)
+- **Lesson**: Rely on runtime capability detection, not version strings.
+
+### Dual API hosts
+- `api.pmxt.dev` - reads, Router, MCP, venue passthrough
+- `trade.pmxt.dev` - hosted writes + hosted account state
+- Both authenticate with the same `pmxt_api_key`.
+
+### Python SDK has hosted mode built-in
+- `Exchange.__init__()` accepts `pmxt_api_key`, `wallet_address`, `base_url`
+- Auto-resolves base URL: `PMXT_BASE_URL` → `pmxt_api_key` presence → localhost
+- `build_order` + `submit_order` exist natively in Python SDK >= 2.50
+- `call_api(operation_id, params)` exposes raw OpenAPI endpoints
+
+### Router is NOT a separate Python class
+- Router appears as `exchange="router"` target
+- Router methods: `compareMarketPrices`, `fetchMarketMatches`, `fetchArbitrage`, etc.
+- Available via `pmxt_call("methodName", "router", params={...})`
 
 ### server.status() returns a dict, not an object
-The docs suggest `status.running`, `status.pid` etc. In practice, `pmxt.server.status()`
-returns a plain `dict` with keys: `running`, `pid`, `port`, `version`, `uptimeSeconds`,
-`lock_file`. Must use `.get()` not attribute access.
+- Keys: `running`, `pid`, `port`, `version`, `uptime_seconds`, `lock_file`
+- Must use `.get()` not attribute access.
 
 ### fetch_market() (singular) doesn't work by ID
-`exchange.fetch_market(market_id="701486")` throws `PmxtError: Unknown error`.
-The singular method exists but its parameter handling is unclear.
-**Workaround**: Use `fetch_markets(query=keyword, limit=N)` to search by title/keyword.
+- `exchange.fetch_market(market_id="701486")` throws `PmxtError: Unknown error`
+- **Workaround**: Use `fetch_markets(query=keyword, limit=N)`.
 
-### fetch_markets(slug=...) is slow or returns empty
-For Polymarket, slug-based lookup (`fetch_markets(slug="will-bitcoin-reach-...")`) either
-times out or returns 0 results. The slug parameter doesn't map to Polymarket's API as
-expected.
-**Workaround**: Use keyword query search. Works fast and reliably.
+### outcome_id is Very Long
+- Polymarket outcome_ids are 70+ character token IDs
+- Use labels for display, pass IDs as-is for API calls
 
-### search vs quote — keyword is the key
-The most reliable way to find a specific market is through keyword search.
-Quote should accept a distinctive phrase from the market title, not a numeric ID.
+## pmxt-mcp Design Patterns Worth Adopting
 
-### orders still need real outcome_ids under the hood
-The pmxt SDK's `create_order()` call requires `market_id` plus `outcome_id`.
-This wrapper now resolves `yes` / `no` or exact labels from markets already fetched by
-`pmxt_search()` / `pmxt_quote()`. If you skip the lookup step, pass the exact
-`outcome_id` yourself.
+### Auto-generated tool surface
+- PMXT-MCP generates `src/generated/tools.ts` from OpenAPI + method-verbs.json
+- Auto-runs on every PMXT release via GitHub Actions `sync-mcp.yml`
+- hermes-pmxt should adopt: `scripts/sync_pmxt_registry.py`
 
-## Kalshi Behavior
+### Flat agent-friendly schemas
+- Complex params flattened to top-level MCP tool inputs
+- `ArgSpec` metadata for runtime positional reconstruction
+- `flatten: true` flags merged params for cleaner agent UX
 
-- Kalshi returns markets with `before`/`not before` label style
-- Kalshi can be read-only without API keys (data only)
-- Kalshi search is slower than Polymarket
+### Safety annotations built into tools
+- `readOnlyHint: true` - safe for repeated calls
+- `destructiveHint: true` - requires confirmation
+- `idempotentHint: true` - safe to retry
+- hermes-pmxt mirrors this in registry.py
 
-## Sidecar Server
+### Three config modes: hosted / local / custom
+- `PMXT_API_URL` overrides everything
+- `PMXT_API_KEY` → hosted `api.pmxt.dev`
+- Neither → local `http://localhost:3847`
+- hermes-pmxt mirrors this in config.py
 
-- Auto-starts on first SDK call (~1-2 seconds)
-- `pmxt.server.health()` returns bool — simplest check
-- Logs at `~/.pmxt/server.log`
-- Shared across Python processes (singleton)
-- Version 2.0.2 at time of build
+### Compact result shaping
+- `verbose=false` (default): compact agent-friendly output
+- `verbose=true`: raw uncompacted
+- Strips market status when active, truncates descriptions
+- hermes-pmxt mirrors this in shaper.py
+
+### Instructions favor events first
+- pmxt-mcp tells agents: "users say 'market', they mean 'event'"
+- Discovery: fetchEvents → drill to markets → outcomes
 
 ## Price Scale
-
 All prices confirmed as 0.0-1.0 (probabilities). Kalshi internally uses 0-100
 but pmxt normalizes to 0-1 in the Python SDK.
 
-## outcome_id is Very Long
-
-Polymarket outcome_ids are 70+ character strings (token IDs). Don't try to
-display them — use labels for display and pass IDs as-is for API calls.
-
 ## Trade Timestamps
+All timestamps are Unix milliseconds. Divide by 1000 for Python datetime.
 
-All timestamps are Unix milliseconds. Recent trades show real-time activity —
-sub-second resolution. Divide by 1000 for Python datetime.
+## Kalshi Behavior
+- Returns markets with `before`/`not before` label style
+- Read-only without API keys (local sidecar mode)
+- Search is slower than Polymarket
 
-## Arbitrage Scan Design
+## hermes-pmxt Architecture Decisions (v0.3.0)
 
-Cross-exchange matching is done by title word overlap (Jaccard similarity on words).
-40% threshold works for finding related markets. True arbitrage is rare — most
-combined prices are near 1.00.
+### Lazy import over eager import
+- `exchanges.py` uses `_get_pmxt()` lazy getter
+- Package imports cleanly without pmxt installed
+- Only raises ImportError when pmxt functionality is used
+
+### Generated registry over manual wrappers
+- `registry.py` has ~33 tool definitions with safety annotations
+- `pmxt_call()` dispatches to SDK methods with guard rails
+- Handwritten wrappers for common flows only
+
+### confirmed=True gate for destructive ops
+- `createOrder`, `submitOrder`, `cancelOrder` require `confirmed=True`
+- `_require_confirmed()` returns human-readable error when not confirmed
+
+### Runtime status as first troubleshooting step
+- `pmxt_runtime_status()` shows mode, URL, version, sidecar health
+- Works without pmxt installed
+
+### Exchange list with capability detection
+- 17 known exchanges in registry
+- `pmxt_list_exchanges()` reports which are available in installed build
+- Aliases for common naming variants

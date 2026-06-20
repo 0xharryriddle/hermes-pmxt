@@ -6,13 +6,37 @@ import os
 import time
 from typing import Optional
 
-try:
-    import pmxt
-except ImportError as exc:
-    raise ImportError(
-        "pmxt is not installed. Run: pip install pmxt. "
-        "Depending on your pmxt version, you may also need a pmxtjs sidecar."
-    ) from exc
+_pmxt_module = None
+_pmxt_import_error: Optional[str] = None
+
+
+def _get_pmxt():
+    """Lazy-import pmxt. Raises ImportError only when pmxt functionality is actually used."""
+    global _pmxt_module, _pmxt_import_error
+    if _pmxt_module is not None:
+        return _pmxt_module
+    if _pmxt_import_error is not None:
+        raise ImportError(_pmxt_import_error)
+    try:
+        import pmxt as _mod
+
+        _pmxt_module = _mod
+        return _pmxt_module
+    except ImportError as exc:
+        _pmxt_import_error = (
+            "pmxt is not installed. Run: pip install pmxt. "
+            "Depending on your pmxt version, you may also need a pmxtjs sidecar."
+        )
+        raise ImportError(_pmxt_import_error) from exc
+
+
+def is_pmxt_available() -> bool:
+    """Return True if pmxt can be imported, False otherwise."""
+    try:
+        _get_pmxt()
+        return True
+    except ImportError:
+        return False
 
 
 _exchange_cache: dict[str, object] = {}
@@ -53,6 +77,7 @@ def _exchange_class(name: str):
     """Resolve the pmxt exchange class for a normalized exchange name."""
     normalized = normalize_exchange_name(name)
     class_name = "".join(part.capitalize() for part in normalized.split("_"))
+    pmxt = _get_pmxt()
     return getattr(pmxt, class_name, None)
 
 
@@ -63,6 +88,7 @@ def available_exchange_names() -> list[str]:
 
 def ensure_server() -> tuple[bool, Optional[str]]:
     """Ensure the pmxt sidecar server is running. Returns (ok, error_msg)."""
+    pmxt = _get_pmxt()
     try:
         if not pmxt.server.health():
             pmxt.server.start()
@@ -95,6 +121,7 @@ def get_exchange(name: str) -> tuple[Optional[object], Optional[str]]:
 def _create_exchange(name: str):
     """Instantiate an exchange by normalized name."""
     normalized = normalize_exchange_name(name)
+    pmxt = _get_pmxt()
 
     if normalized == "polymarket":
         return pmxt.Polymarket(
@@ -129,6 +156,7 @@ def _create_exchange(name: str):
 
 def server_status() -> dict:
     """Get sidecar server status."""
+    pmxt = _get_pmxt()
     try:
         status = pmxt.server.status()
         if isinstance(status, dict):
@@ -152,6 +180,7 @@ def server_status() -> dict:
 
 def server_logs(n: int = 50) -> list[str]:
     """Get last N lines of server logs."""
+    pmxt = _get_pmxt()
     try:
         return list(pmxt.server.logs(n))
     except Exception:
