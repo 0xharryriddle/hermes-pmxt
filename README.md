@@ -246,7 +246,8 @@ hermes-pmxt/
 ├── skill/
 │   └── SKILL.md             # Hermes agent skill instructions
 ├── examples/
-│   └── demo.py              # Interactive demo
+│   ├── demo.py              # Interactive demo
+│   └── tennis_live_markets.py  # Tennis markets grounded in live match state
 ├── tests/
 │   ├── conftest.py          # Test path setup
 │   ├── test_exchanges.py    # Exchange wiring unit tests
