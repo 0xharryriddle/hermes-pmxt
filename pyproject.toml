@@ -24,6 +24,8 @@ dev = [
     # Pinned to the range that matches the declared [tool.ruff.lint] contract so
     # the local lint result and CI cannot silently disagree.
     "ruff>=0.16,<0.17",
+    # tomllib is stdlib only from 3.11; the declared floor here is 3.10.
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [build-system]

@@ -1,10 +1,14 @@
 """Native Hermes plugin registration tests without a live Hermes runtime."""
 
 import json
-import tomllib
 from pathlib import Path
 
 import pytest
+
+try:  # tomllib is stdlib from 3.11; tomli is its backport for 3.10
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib
 
 
 @pytest.mark.unit
