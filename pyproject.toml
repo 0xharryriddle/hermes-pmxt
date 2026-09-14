@@ -1,18 +1,21 @@
 [project]
 name = "hermes-pmxt"
-version = "0.3.0"
-description = "Prediction market integration for Hermes Agent -- search, compare, and trade across prediction market exchanges via pmxt"
+version = "0.4.0"
+description = "Prediction-market SDK and read-only native Hermes plugin via PMXT"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-    "pmxt>=2.50.0",
+    "pmxt>=2.54.0,<2.55.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/0xharryriddle/hermes-pmxt"
 Repository = "https://github.com/0xharryriddle/hermes-pmxt"
 Issues = "https://github.com/0xharryriddle/hermes-pmxt/issues"
+
+[project.entry-points."hermes_agent.plugins"]
+hermes-pmxt = "hermes_pmxt"
 
 [project.optional-dependencies]
 dev = [

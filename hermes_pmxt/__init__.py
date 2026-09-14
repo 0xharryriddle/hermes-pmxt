@@ -28,6 +28,7 @@ from hermes_pmxt.registry import (
 from hermes_pmxt.shaper import (
     shape_result,
 )
+from hermes_pmxt.plugin import register
 
 from hermes_pmxt.tools import (
     pmxt_arbitrage_scan,
@@ -55,7 +56,7 @@ from hermes_pmxt.tools import (
     pmxt_trades,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # Config
@@ -76,6 +77,8 @@ __all__ = [
     "requires_credentials",
     # Shaper
     "shape_result",
+    # Native Hermes plugin entrypoint
+    "register",
     # Tools
     "pmxt_call",
     "pmxt_search",

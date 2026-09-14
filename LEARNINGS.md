@@ -1,11 +1,11 @@
-# Learnings -- Building hermes-pmxt v0.3.0
+# Learnings -- Building hermes-pmxt v0.4.0
 
 Things discovered during upgrade that differ from docs/research.
 
-## pmxt SDK Realities (v2.50.x)
+## pmxt SDK Realities (v2.54.x)
 
 ### Version metadata is inconsistent across sources
-- PyPI: `pmxt 2.50.16`
+- PyPI: `pmxt 2.54.0`
 - Raw Python pyproject.toml in monorepo: `2.18.0`
 - monorepo package.json: `pmxtjs ^2.17.1`
 - Generated pmxt-mcp tools.ts: `2.50.16` (2026-06-18)
@@ -22,10 +22,13 @@ Things discovered during upgrade that differ from docs/research.
 - `build_order` + `submit_order` exist natively in Python SDK >= 2.50
 - `call_api(operation_id, params)` exposes raw OpenAPI endpoints
 
-### Router is NOT a separate Python class
-- Router appears as `exchange="router"` target
-- Router methods: `compareMarketPrices`, `fetchMarketMatches`, `fetchArbitrage`, etc.
-- Available via `pmxt_call("methodName", "router", params={...})`
+### Router is a separate Python class
+- `pmxt.Router(pmxt_api_key=..., base_url=..., auto_start_server=False)` is the
+  documented cross-venue client.
+- Its comparison/matching methods use keyword-only selectors, so do not pass a
+  flat dict as a positional argument.
+- Its `.has` property can make an HTTP call; never read it during plugin import
+  or registration.
 
 ### server.status() returns a dict, not an object
 - Keys: `running`, `pid`, `port`, `version`, `uptime_seconds`, `lock_file`
@@ -85,7 +88,7 @@ All timestamps are Unix milliseconds. Divide by 1000 for Python datetime.
 - Read-only without API keys (local sidecar mode)
 - Search is slower than Polymarket
 
-## hermes-pmxt Architecture Decisions (v0.3.0)
+## hermes-pmxt Architecture Decisions (v0.4.0)
 
 ### Lazy import over eager import
 - `exchanges.py` uses `_get_pmxt()` lazy getter
@@ -105,7 +108,17 @@ All timestamps are Unix milliseconds. Divide by 1000 for Python datetime.
 - `pmxt_runtime_status()` shows mode, URL, version, sidecar health
 - Works without pmxt installed
 
+### Native plugin is read-only by design
+- Pip entry point loads the `hermes_pmxt` module, whose package facade exports
+  `register`; Hermes's loader expects a module with that attribute, not a direct
+  callable entry point.
+- The bundled skill is registered as a `Path`, not a string, because PluginContext
+  calls `.exists()` on it.
+- Native plugin tool registration has no network, sidecar or capability probe.
+
 ### Exchange list with capability detection
-- 17 known exchanges in registry
-- `pmxt_list_exchanges()` reports which are available in installed build
-- Aliases for common naming variants
+- Keep known venue names separate from `router`/`mock`, class availability and
+  live capability probes.
+- `pmxt_list_exchanges()` reports class availability; a future explicit probe may
+  fetch per-venue `.has` with timeout/error state.
+- Aliases for common naming variants are explicit class-map data, not title case.

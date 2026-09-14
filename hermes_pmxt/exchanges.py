@@ -45,11 +45,19 @@ EXCHANGES = (
     "polymarket",
     "polymarket_us",
     "kalshi",
+    "kalshi-demo",
     "limitless",
+    "probable",
+    "baozi",
     "myriad",
     "opinion",
     "metaculus",
     "smarkets",
+    "gemini-titan",
+    "hyperliquid",
+    "suibets",
+    "rain",
+    "hunch",
 )
 
 TRADING_EXCHANGES = (
@@ -65,6 +73,26 @@ _ALIASES = {
     "polymarketus": "polymarket_us",
 }
 
+_EXCHANGE_CLASSES = {
+    "polymarket": "Polymarket",
+    "polymarket_us": "PolymarketUS",
+    "kalshi": "Kalshi",
+    "kalshi-demo": "KalshiDemo",
+    "limitless": "Limitless",
+    "probable": "Probable",
+    "baozi": "Baozi",
+    "myriad": "Myriad",
+    "opinion": "Opinion",
+    "metaculus": "Metaculus",
+    "smarkets": "Smarkets",
+    "gemini-titan": "GeminiTitan",
+    "hyperliquid": "Hyperliquid",
+    "suibets": "SuiBets",
+    "rain": "Rain",
+    "hunch": "Hunch",
+    "router": "Router",
+}
+
 
 def normalize_exchange_name(name: str) -> str:
     """Normalize a user-facing exchange name to the package's canonical form."""
@@ -76,7 +104,9 @@ def normalize_exchange_name(name: str) -> str:
 def _exchange_class(name: str):
     """Resolve the pmxt exchange class for a normalized exchange name."""
     normalized = normalize_exchange_name(name)
-    class_name = "".join(part.capitalize() for part in normalized.split("_"))
+    class_name = _EXCHANGE_CLASSES.get(normalized)
+    if class_name is None:
+        return None
     pmxt = _get_pmxt()
     return getattr(pmxt, class_name, None)
 
@@ -88,6 +118,9 @@ def available_exchange_names() -> list[str]:
 
 def ensure_server() -> tuple[bool, Optional[str]]:
     """Ensure the pmxt sidecar server is running. Returns (ok, error_msg)."""
+    if os.getenv("PMXT_API_KEY") or os.getenv("PMXT_API_URL") or os.getenv("PMXT_BASE_URL"):
+        return True, None
+
     pmxt = _get_pmxt()
     try:
         if not pmxt.server.health():
@@ -123,9 +156,23 @@ def _create_exchange(name: str):
     normalized = normalize_exchange_name(name)
     pmxt = _get_pmxt()
 
+    connection_kwargs = {
+        "pmxt_api_key": os.getenv("PMXT_API_KEY"),
+        "wallet_address": os.getenv("PMXT_WALLET_ADDRESS"),
+        "base_url": os.getenv("PMXT_API_URL") or os.getenv("PMXT_BASE_URL"),
+    }
+    connection_kwargs = {key: value for key, value in connection_kwargs.items() if value is not None}
+
+    if normalized == "router":
+        router_kwargs = {
+            key: value for key, value in connection_kwargs.items() if key in {"pmxt_api_key", "base_url"}
+        }
+        return pmxt.Router(**router_kwargs)
+
     if normalized == "polymarket":
         return pmxt.Polymarket(
-            private_key=os.getenv("POLYMARKET_PRIVATE_KEY"),
+            **connection_kwargs,
+            private_key=os.getenv("POLYMARKET_PRIVATE_KEY") or os.getenv("PMXT_PRIVATE_KEY"),
             proxy_address=os.getenv("POLYMARKET_PROXY_ADDRESS"),
             signature_type="gnosis-safe",
         )
@@ -134,16 +181,19 @@ def _create_exchange(name: str):
         if cls is None:
             raise ValueError("Exchange polymarket_us is not available in this pmxt version")
         return cls(
+            **connection_kwargs,
             api_key=os.getenv("POLYMARKET_US_API_KEY"),
             private_key=os.getenv("POLYMARKET_US_PRIVATE_KEY"),
         )
     if normalized == "kalshi":
         return pmxt.Kalshi(
+            **connection_kwargs,
             api_key=os.getenv("KALSHI_API_KEY"),
             private_key=os.getenv("KALSHI_PRIVATE_KEY"),
         )
     if normalized == "limitless":
         return pmxt.Limitless(
+            **connection_kwargs,
             api_key=os.getenv("LIMITLESS_API_KEY"),
             private_key=os.getenv("LIMITLESS_PRIVATE_KEY"),
         )
@@ -151,7 +201,7 @@ def _create_exchange(name: str):
     cls = _exchange_class(normalized)
     if cls is None:
         raise ValueError(f"Unknown exchange: {normalized}")
-    return cls()
+    return cls(**connection_kwargs)
 
 
 def server_status() -> dict:

@@ -13,6 +13,21 @@ from __future__ import annotations
 from typing import Any
 
 
+def _plain(value: Any) -> Any:
+    """Convert PMXT/Pydantic model objects to recursively plain Python data."""
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _plain(model_dump())
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return _plain(to_dict())
+    return value
+
+
 def _truncate(s: Any, max_len: int) -> str:
     """Truncate a string to max_len with '...' suffix."""
     if not isinstance(s, str):
@@ -24,10 +39,12 @@ def _truncate(s: Any, max_len: int) -> str:
 
 def compact_market(m: Any) -> dict:
     """Compact a market dict: id, title, outcomes price/label, volume, liquidity."""
-    src = m if isinstance(m, dict) else {}
+    src = _plain(m)
+    src = src if isinstance(src, dict) else {}
     outcomes = []
     for o in (src.get("outcomes") or []):
         outcomes.append({
+            "outcome_id": o.get("outcome_id"),
             "label": o.get("label", ""),
             "price": o.get("price"),
         })
@@ -58,7 +75,8 @@ def compact_market(m: Any) -> dict:
 
 def compact_single_market(m: Any) -> dict:
     """Compact a single market with slightly more detail (outcome IDs, description)."""
-    src = m if isinstance(m, dict) else {}
+    src = _plain(m)
+    src = src if isinstance(src, dict) else {}
     outcomes = []
     for o in (src.get("outcomes") or []):
         outcomes.append({
@@ -98,7 +116,8 @@ _NESTED_MARKETS_LIMIT = 5
 
 def compact_event(e: Any) -> dict:
     """Compact an event dict: id, title, market count, top N compact markets."""
-    src = e if isinstance(e, dict) else {}
+    src = _plain(e)
+    src = src if isinstance(src, dict) else {}
     all_markets = src.get("top_markets") or src.get("markets") or []
     markets = [compact_market(m) for m in all_markets[: _NESTED_MARKETS_LIMIT]]
 
@@ -123,7 +142,8 @@ def compact_event(e: Any) -> dict:
 
 def compact_order_book(book: Any, max_levels: int = 10) -> dict:
     """Compact an order book dict to best bid/ask + limited depth."""
-    src = book if isinstance(book, dict) else {}
+    src = _plain(book)
+    src = src if isinstance(src, dict) else {}
 
     bids = (src.get("bids") or [])[:max_levels]
     asks = (src.get("asks") or [])[:max_levels]
@@ -152,7 +172,8 @@ def compact_order_book(book: Any, max_levels: int = 10) -> dict:
 
 def compact_comparison(result: Any) -> dict:
     """Compact a market comparison result."""
-    src = result if isinstance(result, dict) else {}
+    src = _plain(result)
+    src = src if isinstance(src, dict) else {}
 
     quotes = []
     for q in (src.get("quotes") or []):
@@ -175,7 +196,8 @@ def compact_comparison(result: Any) -> dict:
 
 def compact_arbitrage(opp: Any) -> dict:
     """Compact an arbitrage opportunity dict."""
-    src = opp if isinstance(opp, dict) else {}
+    src = _plain(opp)
+    src = src if isinstance(src, dict) else {}
     return {
         "strategy": src.get("strategy"),
         "market_a": _truncate(src.get("market_a", ""), 100),
@@ -203,6 +225,7 @@ def shape_result(method: str, raw_data: Any, verbose: bool = False) -> dict:
     Returns:
         Shaped dict with compact representation
     """
+    raw_data = _plain(raw_data)
     if verbose:
         return {"raw": raw_data} if isinstance(raw_data, (dict, list)) else {"raw": str(raw_data)}
 
