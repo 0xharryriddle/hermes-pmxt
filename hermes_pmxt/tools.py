@@ -15,10 +15,12 @@ from __future__ import annotations
 import inspect
 import statistics
 import time
+import uuid
 from datetime import datetime
 from typing import Optional
 
-from hermes_pmxt.config import get_base_url, get_mode, runtime_status as _runtime_status_dict
+from hermes_pmxt.config import get_base_url, get_mode
+from hermes_pmxt.config import runtime_status as _runtime_status_dict
 from hermes_pmxt.exchanges import (
     EXCHANGES,
     TRADING_EXCHANGES,
@@ -33,16 +35,18 @@ from hermes_pmxt.registry import (
     EXCHANGE_ALIASES,
     KNOWN_EXCHANGES,
     get_tool,
+)
+from hermes_pmxt.registry import (
     is_destructive as _is_destructive,
 )
 from hermes_pmxt.shaper import shape_result
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 _market_cache: dict[tuple[str, str], object] = {}
+_built_order_cache: dict[str, tuple[str, object]] = {}
 
 
 def _ok(data, **extra) -> dict:
@@ -725,6 +729,8 @@ def pmxt_order(
     side: str,
     exchange: str,
     price: Optional[float] = None,
+    *,
+    confirmed: bool = False,
 ) -> dict:
     """
     Place an order. Requires exchange credentials.
@@ -732,6 +738,10 @@ def pmxt_order(
     IMPORTANT: Never call without explicit user confirmation including
     market, outcome, amount, and exchange.
     """
+    block = _require_confirmed("create_order", confirmed)
+    if block:
+        return block
+
     err = _ensure()
     if err:
         return err
@@ -760,7 +770,7 @@ def pmxt_order(
             "market_id": market_id,
             "outcome_id": outcome_id,
             "side": side,
-            "type": "limit" if price is not None else "market",
+            "order_type": "limit" if price is not None else "market",
             "amount": amount,
         }
         if price is not None:
@@ -773,7 +783,7 @@ def pmxt_order(
             "market_id": getattr(order, "market_id", market_id),
             "outcome_id": getattr(order, "outcome_id", outcome_id),
             "side": getattr(order, "side", side),
-            "type": getattr(order, "type", order_params["type"]),
+            "type": getattr(order, "type", order_params["order_type"]),
             "amount": getattr(order, "amount", amount),
             "price": getattr(order, "price", price),
             "status": getattr(order, "status", None),
@@ -1178,6 +1188,17 @@ def _resolve_method_on_exchange(ex: object, method_name: str, *args):
     )
 
 
+def _to_snake_case(name: str) -> str:
+    """Convert a PMXT camelCase method name to its Python SDK spelling."""
+    chars = []
+    for char in name:
+        if char.isupper():
+            chars.extend(("_", char.lower()))
+        else:
+            chars.append(char)
+    return "".join(chars).lstrip("_")
+
+
 # ---------------------------------------------------------------------------
 # Generic pmxt_call
 # ---------------------------------------------------------------------------
@@ -1229,7 +1250,12 @@ def pmxt_call(
         if args is not None:
             raw = _resolve_method_on_exchange(ex, method, *args)
         else:
-            raw = _resolve_method_on_exchange(ex, method, params or {})
+            python_method = _to_snake_case(method)
+            resolved = getattr(ex, python_method, None)
+            if callable(resolved):
+                raw = resolved(**(params or {}))
+            else:
+                raw = _resolve_method_on_exchange(ex, method, params or {})
 
         shaped = shape_result(method, raw, verbose=verbose)
         shaped["meta"] = {
@@ -1325,7 +1351,11 @@ def pmxt_build_order(
             slippage_pct=slippage_pct,
         )
 
-        # Serialize built order details for agent inspection
+        submission_token = uuid.uuid4().hex
+        _built_order_cache[submission_token] = (exchange_name, built)
+
+        # Do not serialize the SDK's BuiltOrder into an untrusted dict. The
+        # opaque token retains the signed object for the submit step.
         return _ok({
             "market_id": getattr(built, "market_id", market_id),
             "outcome_id": getattr(built, "outcome_id", resolved_outcome_id),
@@ -1334,18 +1364,17 @@ def pmxt_build_order(
             "amount": amount,
             "price": price,
             "denom": denom,
-            "built": {
-                "expiry": getattr(built, "expiry", None),
-            },
+            "submission_token": submission_token,
+            "expires_at": getattr(built, "expiry", None),
             "preview": True,
-            "note": "Order built but NOT submitted. Call pmxt_submit_order() with confirmed=True to place it.",
+            "note": "Order built but NOT submitted. Submit with this submission_token and confirmed=True.",
         }, exchange=exchange_name)
     except Exception as e:
         return _err(f"{exchange_name}/build_order: {e}")
 
 
 def pmxt_submit_order(
-    built: dict,
+    submission_token: str | dict,
     exchange: str,
     *,
     confirmed: bool = False,
@@ -1353,7 +1382,7 @@ def pmxt_submit_order(
     """
     Submit a pre-built order. DESTRUCTIVE -- requires confirmed=True.
 
-    The built payload must come from pmxt_build_order().
+    The submission token must come from pmxt_build_order() in this process.
     """
     block = _require_confirmed("submit_order", confirmed)
     if block:
@@ -1364,6 +1393,17 @@ def pmxt_submit_order(
         return err
 
     exchange_name = normalize_exchange_name(exchange)
+    if not isinstance(submission_token, str):
+        return _err("Submit requires the opaque submission_token returned by pmxt_build_order().")
+
+    cached = _built_order_cache.pop(submission_token, None)
+    if cached is None:
+        return _err("Unknown or already-used submission_token. Build the order again before submitting.")
+
+    cached_exchange, built = cached
+    if cached_exchange != exchange_name:
+        return _err("submission_token was built for a different exchange.")
+
     ex, init_err = get_exchange(exchange_name)
     if init_err:
         return _err(init_err)

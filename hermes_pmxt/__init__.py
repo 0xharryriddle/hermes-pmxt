@@ -9,26 +9,28 @@ will raise ImportError with a helpful message at call time.
 """
 
 from hermes_pmxt.config import (
-    get_mode,
     get_base_url,
+    get_mode,
     runtime_status,
     runtime_status_str,
 )
 from hermes_pmxt.exchanges import (
     is_pmxt_available,
 )
+from hermes_pmxt.plugin import register
 from hermes_pmxt.registry import (
-    TOOLS as PMXT_TOOLS,
     KNOWN_EXCHANGES,
     get_tool,
-    list_tools,
     is_destructive,
+    list_tools,
     requires_credentials,
+)
+from hermes_pmxt.registry import (
+    TOOLS as PMXT_TOOLS,
 )
 from hermes_pmxt.shaper import (
     shape_result,
 )
-
 from hermes_pmxt.tools import (
     pmxt_arbitrage_scan,
     pmxt_balance,
@@ -55,7 +57,7 @@ from hermes_pmxt.tools import (
     pmxt_trades,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # Config
@@ -76,6 +78,8 @@ __all__ = [
     "requires_credentials",
     # Shaper
     "shape_result",
+    # Native Hermes plugin entrypoint
+    "register",
     # Tools
     "pmxt_call",
     "pmxt_search",

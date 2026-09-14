@@ -1,13 +1,13 @@
 # hermes-pmxt
 
-Prediction market integration for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
-Search markets, compare prices, detect arbitrage, and trade across prediction market
-exchanges via [pmxt](https://github.com/pmxt-dev/pmxt) (>= 2.50.0).
+Prediction-market research integration for [Hermes Agent](https://github.com/NousResearch/hermes-agent),
+powered by [PMXT](https://github.com/pmxt-dev/pmxt) 2.54.x.
 
 ## What This Is
 
-A Hermes skill + Python toolset that gives any Hermes agent real-time access to prediction
-markets. Instead of hallucinating probabilities, the agent checks actual market prices.
+A Python SDK, native Hermes plugin, and bundled skill for real-time prediction-market research.
+The native plugin is read-only: it discovers events/markets, examines series and order books,
+and uses PMXT Router relation/confidence evidence for cross-venue research.
 
 ```
 User: "Will Trump win 2028?"
@@ -29,21 +29,25 @@ Verify it works:
 python3 -c "from hermes_pmxt import pmxt_runtime_status; print(pmxt_runtime_status())"
 ```
 
-### Hermes Skill Setup
+### Native Hermes Plugin
 
-Install the Hermes skill file so your agent knows when to use the package:
+Install into the same Python environment that runs `hermes`, then explicitly enable it:
 
 ```bash
-mkdir -p ~/.hermes/skills/pmxt
-curl -fsSL https://raw.githubusercontent.com/0xharryriddle/hermes-pmxt/main/skill/SKILL.md \
-  -o ~/.hermes/skills/pmxt/SKILL.md
+python -m pip install hermes-pmxt
+hermes plugins enable hermes-pmxt
 ```
 
-If your Hermes install supports GitHub-backed skill/plugin installation, use:
+Restart Hermes or begin a new session after enabling. The plugin bundles a namespaced skill
+available as `hermes-pmxt:pmxt`. It exposes only read-only tools:
 
 ```text
-https://github.com/0xharryriddle/hermes-pmxt
+pmxt_runtime_status, pmxt_list_exchanges, pmxt_search, pmxt_events,
+pmxt_series, pmxt_order_books, pmxt_matched_market_clusters
 ```
+
+The plugin does not submit orders, cancel orders, fund accounts, or access wallet operations.
+The Python SDK retains its separately documented, confirmation-gated legacy order helpers.
 
 ### Upgrade
 
@@ -104,8 +108,7 @@ print(f"YES: {quote['data']['yes_pct']}  NO: {quote['data']['no_pct']}")
 ```
   Event (broad topic)
     └── Market (tradeable question)
-          ├── Outcome "Yes"
-          └── Outcome "No"
+          └── Outcome (one or more labelled positions)
 ```
 
 When users ask about a topic, start with events (`pmxt_events`), then drill down to
@@ -124,6 +127,8 @@ markets and outcomes.
 | `pmxt_ohlcv(outcome_id, exchange, resolution?, limit?)` | No* | Price candles |
 | `pmxt_trades(outcome_id, exchange, limit?)` | No* | Recent trades |
 | `pmxt_execution_price(outcome_id, exchange, side, amount)` | No* | Slippage estimate |
+| `pmxt_call("fetchSeries", exchange, ...)` | No* | Venue-native series |
+| `pmxt_call("fetchOrderBooks", exchange, ...)` | No* | Batch order books |
 
 ### Cross-Venue & Arbitrage
 
@@ -132,7 +137,8 @@ markets and outcomes.
 | `pmxt_compare_market(query, exchanges?, limit?)` | No* | Compare prices across exchanges |
 | `pmxt_arbitrage_scan(query, exchanges?, threshold?)` | No* | Detect arbitrage opportunities |
 | `pmxt_call("compareMarketPrices", "router", ...)` | No* | Native router comparison |
-| `pmxt_call("fetchArbitrage", "router", ...)` | No* | Native arbitrage search |
+| `pmxt_call("fetchMatchedMarketClusters", "router", ...)` | No* | Cross-venue matches with relation/confidence evidence |
+| `pmxt_call("fetchArbitrage", "router", ...)` | No* | Native arbitrage candidates for review |
 | `pmxt_call("fetchHedges", "router", ...)` | No* | Hedging opportunities |
 
 ### Portfolio & Account
@@ -175,8 +181,8 @@ markets and outcomes.
 **Destructive operations (create, submit, cancel orders) require explicit user confirmation.**
 
 ```python
-# SAFE: Build order for preview (does NOT place any order)
-built = pmxt_build_order(
+# SAFE: Build order for preview (does NOT place a real order)
+preview = pmxt_build_order(
     market_id="market-uuid",
     outcome="yes",
     side="buy",
@@ -186,24 +192,23 @@ built = pmxt_build_order(
     exchange="polymarket",
 )
 
-# DESTRUCTIVE: Submit requires confirmed=True
-result = pmxt_submit_order(built, "polymarket", confirmed=True)
+# DESTRUCTIVE: Submit the one-time token after explicit user confirmation.
+result = pmxt_submit_order(preview["data"]["submission_token"], "polymarket", confirmed=True)
 
-# Without confirmed=True:
-result = pmxt_submit_order(built, "polymarket")
-# => {"success": False, "error": "Operation 'submit_order' is destructive..."}
+# Caller-built dicts are rejected; the SDK BuiltOrder remains process-local.
+# A token is one-time use and bound to the exchange used for build.
 ```
 
 ## Supported Exchanges
 
-hermes-pmxt knows about 17 venues including:
+hermes-pmxt knows about PMXT's current venue targets plus `router` and `mock`, including:
 
 - `polymarket` / `polymarket_us`
 - `kalshi` / `kalshi-demo`
 - `limitless`
 - `probable` / `baozi` / `myriad` / `opinion`
 - `metaculus` / `smarkets`
-- `gemini-titan` / `hyperliquid` / `suibets` / `rain`
+- `gemini-titan` / `hyperliquid` / `suibets` / `rain` / `hunch`
 - `mock` / `router`
 
 Actual availability depends on the installed `pmxt` build. Run `pmxt_list_exchanges()` to check.

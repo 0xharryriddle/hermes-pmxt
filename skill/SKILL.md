@@ -1,7 +1,7 @@
 ---
 name: pmxt
-description: Prediction market integration -- search, compare, and trade across pmxt-supported prediction market exchanges.
-version: 0.3.0
+description: Prediction-market research via PMXT 2.54 and hermes-pmxt's read-only native plugin.
+version: 0.4.0-dev
 author: hermes-pmxt
 license: MIT
 metadata:
@@ -26,23 +26,31 @@ arbitrage detection, execution planning, and portfolio inspection.
 
 ## Setup
 
-Install from PyPI. This brings in `pmxt>=2.50.0`; do not instruct users to clone
-the repo unless they are developing the integration.
+The native plugin is read-only and bundled with the PyPI package. Install it into
+the Python environment used by Hermes, then enable it explicitly:
 
 ```bash
-pip install hermes-pmxt
-
-# Check runtime status
-python3 -c "from hermes_pmxt import pmxt_runtime_status; print(pmxt_runtime_status())"
+python -m pip install --upgrade hermes-pmxt
+hermes plugins enable hermes-pmxt
 ```
 
-Hosted mode (recommended): set `PMXT_API_KEY` env var. Local sidecar mode works
-without an API key but requires pmxt-core running on localhost:3847.
+Restart Hermes or begin a new session. The bundled skill is namespaced as
+`hermes-pmxt:pmxt`. Hosted mode (recommended) needs `PMXT_API_KEY`; local sidecar
+mode needs a reachable pmxt-core on localhost:3847. Do not instruct users to clone
+the repo unless they are developing the integration.
 
-If Hermes needs an explicit skill install, install this file to
-`~/.hermes/skills/pmxt/SKILL.md` or use your Hermes skill/plugin installer with the
-GitHub URL `https://github.com/0xharryriddle/hermes-pmxt`. Upgrade with
-`pip install --upgrade hermes-pmxt`.
+## Native Plugin Surface
+
+The native plugin provides only these read-only tools:
+
+- `pmxt_runtime_status`, `pmxt_list_exchanges`
+- `pmxt_search`, `pmxt_events`
+- `pmxt_series`, `pmxt_order_books`
+- `pmxt_matched_market_clusters`
+
+It intentionally does not provide order submission, cancellation, funding or
+wallet operations. Use the Python SDK directly only when a caller has its own
+separate authorization boundary.
 
 ## Quick Reference
 

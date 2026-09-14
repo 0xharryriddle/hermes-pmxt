@@ -13,27 +13,28 @@ Trading tests (disabled by default):
 import pytest
 
 from hermes_pmxt import (
-    get_mode,
     get_base_url,
+    get_mode,
     pmxt_list_exchanges,
     pmxt_runtime_status,
     runtime_status_str,
 )
 from hermes_pmxt.registry import (
-    TOOLS,
     KNOWN_EXCHANGES,
+    TOOLS,
     get_tool,
     list_tools,
-    is_destructive as registry_is_destructive,
     requires_credentials,
 )
+from hermes_pmxt.registry import (
+    is_destructive as registry_is_destructive,
+)
 from hermes_pmxt.shaper import (
-    compact_market,
     compact_event,
+    compact_market,
     compact_order_book,
     shape_result,
 )
-
 
 # ============================================================================
 # Unit tests -- no pmxt, no network
@@ -119,12 +120,50 @@ class TestRegistry:
         assert "router" in KNOWN_EXCHANGES
         assert len(KNOWN_EXCHANGES) >= 12
 
+    def test_registry_includes_pmxt_254_read_only_primitives(self):
+        assert get_tool("fetchSeries") is not None
+        assert get_tool("fetchOrderBooks") is not None
+        assert get_tool("fetchMatchedMarketClusters") is not None
+
     def test_get_tool_unknown(self):
         assert get_tool("nonexistentMethod") is None
 
 
 @pytest.mark.unit
 class TestShaper:
+    def test_compact_market_preserves_n_way_outcome_ids(self):
+        market = {
+            "market_id": "mcap-ladder",
+            "title": "Token market-cap ladder",
+            "outcomes": [
+                {"outcome_id": "below", "label": "Below $1B", "price": 0.2},
+                {"outcome_id": "one-to-two", "label": "$1B–$2B", "price": 0.5},
+                {"outcome_id": "above", "label": "Above $2B", "price": 0.3},
+            ],
+        }
+
+        compact = compact_market(market)
+
+        assert [outcome["outcome_id"] for outcome in compact["outcomes"]] == [
+            "below",
+            "one-to-two",
+            "above",
+        ]
+
+    def test_shape_result_serializes_model_dump_objects(self):
+        class Model:
+            def model_dump(self):
+                return {
+                    "market_id": "m1",
+                    "title": "Model market",
+                    "outcomes": [{"outcome_id": "yes", "label": "Yes", "price": 0.6}],
+                }
+
+        shaped = shape_result("fetchMarkets", [Model()])
+
+        assert shaped["markets"][0]["market_id"] == "m1"
+        assert shaped["markets"][0]["outcomes"][0]["outcome_id"] == "yes"
+
     def test_compact_market(self):
         market = {
             "market_id": "m1",
@@ -225,6 +264,127 @@ class TestToolCallSafety:
         from hermes_pmxt.tools import _DESTRUCTIVE_CONFIRM_MSG
         assert "confirmation" in _DESTRUCTIVE_CONFIRM_MSG.lower()
 
+    def test_legacy_order_blocks_without_confirmation(self, monkeypatch):
+        """The legacy one-step order path must not bypass the write gate."""
+        from hermes_pmxt import tools
+
+        called = False
+
+        class FakeExchange:
+            def create_order(self, **kwargs):
+                nonlocal called
+                called = True
+
+        monkeypatch.setattr(tools, "_ensure", lambda: None)
+        monkeypatch.setattr(tools, "get_exchange", lambda exchange: (FakeExchange(), None))
+
+        result = tools.pmxt_order("m1", "outcome-1", 1.0, "buy", "polymarket")
+
+        assert result["success"] is False
+        assert "confirmation" in result["error"].lower()
+        assert called is False
+
+    def test_legacy_order_uses_pmxt_order_type_keyword(self, monkeypatch):
+        """PMXT 2.54 create_order rejects the historical `type` keyword."""
+        from hermes_pmxt import tools
+
+        received = {}
+
+        class FakeOrder:
+            id = "o1"
+            status = "open"
+
+        class FakeExchange:
+            def create_order(self, **kwargs):
+                received.update(kwargs)
+                return FakeOrder()
+
+        monkeypatch.setattr(tools, "_ensure", lambda: None)
+        monkeypatch.setattr(tools, "get_exchange", lambda exchange: (FakeExchange(), None))
+        monkeypatch.setattr(tools, "_get_cached_market", lambda exchange, market: None)
+
+        result = tools.pmxt_order(
+            "m1", "outcome-1", 1.0, "buy", "polymarket", confirmed=True
+        )
+
+        assert result["success"] is True
+        assert received["order_type"] == "market"
+        assert "type" not in received
+
+
+@pytest.mark.unit
+class TestPmxt254Dispatch:
+    def test_router_keyword_params_are_not_passed_as_positional_dict(self, monkeypatch):
+        """PMXT 2.54 Router comparison selectors are keyword-only."""
+        from hermes_pmxt import tools
+
+        received = {}
+
+        class FakeRouter:
+            def compare_market_prices(self, *, market_id=None, slug=None, url=None):
+                received.update(market_id=market_id, slug=slug, url=url)
+                return []
+
+        monkeypatch.setattr(tools, "_ensure", lambda: None)
+        monkeypatch.setattr(tools, "get_exchange", lambda exchange: (FakeRouter(), None))
+
+        result = tools.pmxt_call(
+            "compareMarketPrices", "router", params={"market_id": "catalog-1"}
+        )
+
+        assert result["success"] is True
+        assert received == {"market_id": "catalog-1", "slug": None, "url": None}
+
+
+@pytest.mark.unit
+class TestBuiltOrderLifecycle:
+    def test_build_order_returns_opaque_payload_required_for_submission(self, monkeypatch):
+        """A summary dict is not an SDK BuiltOrder and must not be submitted."""
+        from hermes_pmxt import tools
+
+        class BuiltOrder:
+            market_id = "m1"
+            outcome_id = "yes-token"
+
+        class FakeExchange:
+            def build_order(self, **kwargs):
+                return BuiltOrder()
+
+        monkeypatch.setattr(tools, "_ensure", lambda: None)
+        monkeypatch.setattr(tools, "get_exchange", lambda exchange: (FakeExchange(), None))
+
+        built = tools.pmxt_build_order(
+            market_id="m1",
+            outcome_id="yes-token",
+            amount=1,
+            order_type="market",
+            exchange="polymarket",
+        )
+
+        assert built["success"] is True
+        assert "submission_token" in built["data"]
+        assert "built" not in built["data"]
+
+    def test_submit_order_rejects_untrusted_dict_payload(self, monkeypatch):
+        """Caller-crafted dicts must not reach the PMXT submit endpoint."""
+        from hermes_pmxt import tools
+
+        called = False
+
+        class FakeExchange:
+            def submit_order(self, payload):
+                nonlocal called
+                called = True
+
+        monkeypatch.setattr(tools, "_ensure", lambda: None)
+        monkeypatch.setattr(tools, "get_exchange", lambda exchange: (FakeExchange(), None))
+
+        result = tools.pmxt_submit_order({"market_id": "m1"}, "polymarket", confirmed=True)
+
+        assert result["success"] is False
+        assert "build" in result["error"].lower()
+        assert called is False
+
 
 # ============================================================================
 # Integration tests -- need pmxt and sidecar/API
@@ -286,7 +446,7 @@ class TestQuote:
 @pytest.mark.integration
 class TestOrderBook:
     def test_order_book(self):
-        from hermes_pmxt import pmxt_search, pmxt_order_book
+        from hermes_pmxt import pmxt_order_book, pmxt_search
         search = pmxt_search("bitcoin", exchange="polymarket", limit=1)
         assert search["success"]
         outcome_id = search["data"][0]["outcomes"][0]["outcome_id"]
@@ -378,7 +538,7 @@ class TestOrderMocked:
             lambda exchange: (fake_exchange, None),
         )
 
-        result = pmxt_order("m1", "yes", 10, "buy", "polymarket", price=0.42)
+        result = pmxt_order("m1", "yes", 10, "buy", "polymarket", price=0.42, confirmed=True)
 
         assert result["success"]
         assert fake_exchange.calls[0]["outcome_id"] == "yes-token"
@@ -416,7 +576,7 @@ class TestOrderMocked:
             lambda exchange: (fake_exchange, None),
         )
 
-        result = pmxt_order("m2", "12345678901234567890", 1, "buy", "polymarket")
+        result = pmxt_order("m2", "12345678901234567890", 1, "buy", "polymarket", confirmed=True)
 
         assert result["success"]
         assert fake_exchange.calls[0]["outcome_id"] == "12345678901234567890"
@@ -434,7 +594,7 @@ class TestOrderMocked:
             lambda exchange: (FakeExchange(), None),
         )
 
-        result = pmxt_order("unknown-market", "yes", 1, "buy", "polymarket")
+        result = pmxt_order("unknown-market", "yes", 1, "buy", "polymarket", confirmed=True)
 
         assert result["success"] is False
         assert "Could not resolve outcome" in result["error"]

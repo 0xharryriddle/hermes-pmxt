@@ -1,12 +1,12 @@
 [project]
 name = "hermes-pmxt"
-version = "0.3.0"
-description = "Prediction market integration for Hermes Agent -- search, compare, and trade across prediction market exchanges via pmxt"
+version = "0.4.0"
+description = "Prediction-market SDK and read-only native Hermes plugin via PMXT"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-    "pmxt>=2.50.0",
+    "pmxt>=2.54.0,<2.55.0",
 ]
 
 [project.urls]
@@ -14,11 +14,18 @@ Homepage = "https://github.com/0xharryriddle/hermes-pmxt"
 Repository = "https://github.com/0xharryriddle/hermes-pmxt"
 Issues = "https://github.com/0xharryriddle/hermes-pmxt/issues"
 
+[project.entry-points."hermes_agent.plugins"]
+hermes-pmxt = "hermes_pmxt"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.0",
-    "ruff>=0.4",
+    # Pinned to the range that matches the declared [tool.ruff.lint] contract so
+    # the local lint result and CI cannot silently disagree.
+    "ruff>=0.16,<0.17",
+    # tomllib is stdlib only from 3.11; the declared floor here is 3.10.
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [build-system]
@@ -28,6 +35,13 @@ build-backend = "hatchling.build"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# Declared explicitly on purpose. Ruff's *implicit* default rule set changes
+# between releases, which turns this gate red without any code change; the API
+# surface and the error-tolerance style here are deliberate choices, not
+# lint debt. Tighten this list deliberately, not by inheriting new defaults.
+select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

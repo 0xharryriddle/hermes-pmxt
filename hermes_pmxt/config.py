@@ -110,6 +110,7 @@ def runtime_status() -> dict:
 
         if _available():
             import importlib.metadata as _metadata
+
             import pmxt  # type: ignore[import-untyped]
 
             result["pmxt_installed"] = True

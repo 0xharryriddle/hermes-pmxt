@@ -37,8 +37,8 @@ jobs:
       - name: Lint
         run: python -m ruff check hermes_pmxt/ tests/
 
-      - name: Run unit tests
-        run: python -m pytest -q -m unit --tb=short
+      - name: Run offline non-trading tests
+        run: python -m pytest -q -m "not integration and not trading" --tb=short
 
       - name: Verify import
         run: python -c "import hermes_pmxt; print('OK v' + hermes_pmxt.__version__)"
