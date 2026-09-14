@@ -1,5 +1,6 @@
 """Tests for exchange initialization helpers and normalization."""
 import pytest
+
 from hermes_pmxt import exchanges
 from hermes_pmxt.exchanges import is_pmxt_available
 

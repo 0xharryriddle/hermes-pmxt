@@ -13,27 +13,28 @@ Trading tests (disabled by default):
 import pytest
 
 from hermes_pmxt import (
-    get_mode,
     get_base_url,
+    get_mode,
     pmxt_list_exchanges,
     pmxt_runtime_status,
     runtime_status_str,
 )
 from hermes_pmxt.registry import (
-    TOOLS,
     KNOWN_EXCHANGES,
+    TOOLS,
     get_tool,
     list_tools,
-    is_destructive as registry_is_destructive,
     requires_credentials,
 )
+from hermes_pmxt.registry import (
+    is_destructive as registry_is_destructive,
+)
 from hermes_pmxt.shaper import (
-    compact_market,
     compact_event,
+    compact_market,
     compact_order_book,
     shape_result,
 )
-
 
 # ============================================================================
 # Unit tests -- no pmxt, no network
@@ -445,7 +446,7 @@ class TestQuote:
 @pytest.mark.integration
 class TestOrderBook:
     def test_order_book(self):
-        from hermes_pmxt import pmxt_search, pmxt_order_book
+        from hermes_pmxt import pmxt_order_book, pmxt_search
         search = pmxt_search("bitcoin", exchange="polymarket", limit=1)
         assert search["success"]
         outcome_id = search["data"][0]["outcomes"][0]["outcome_id"]

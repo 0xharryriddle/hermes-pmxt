@@ -21,7 +21,9 @@ hermes-pmxt = "hermes_pmxt"
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.0",
-    "ruff>=0.4",
+    # Pinned to the range that matches the declared [tool.ruff.lint] contract so
+    # the local lint result and CI cannot silently disagree.
+    "ruff>=0.16,<0.17",
 ]
 
 [build-system]
@@ -31,6 +33,13 @@ build-backend = "hatchling.build"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# Declared explicitly on purpose. Ruff's *implicit* default rule set changes
+# between releases, which turns this gate red without any code change; the API
+# surface and the error-tolerance style here are deliberate choices, not
+# lint debt. Tighten this list deliberately, not by inheriting new defaults.
+select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

@@ -1,9 +1,8 @@
 """Native Hermes plugin registration tests without a live Hermes runtime."""
 
 import json
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 import pytest
 

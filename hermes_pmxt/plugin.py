@@ -18,7 +18,6 @@ from hermes_pmxt.tools import (
     pmxt_search,
 )
 
-
 _SKILL_PATH = Path(__file__).with_name("skill") / "SKILL.md"
 
 
